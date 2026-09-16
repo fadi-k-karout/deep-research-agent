@@ -1,0 +1,17 @@
+[project]
+name = "deep-research-agent"
+version = "0.1.0"
+description = "A stateful deep research agent with dual-layer semantic memory, web search, scraping, and LangGraph orchestration."
+readme = "README.md"
+authors = [
+    { name = "Fadi Karout", email = "fadi@example.com" }
+]
+requires-python = ">=3.14"
+dependencies = []
+
+[project.scripts]
+deep-research-agent = "deep_research_agent:main"
+
+[build-system]
+requires = ["uv_build>=0.12.15,<0.13.0"]
+build-backend = "uv_build"
