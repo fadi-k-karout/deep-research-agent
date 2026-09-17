@@ -27,17 +27,17 @@ class SearchService:
             SearchResponse: The search results, tagged with a per-search id.
 
         Raises:
-            ValueError: If the query string is empty or max_results is outside
-                the supported range (1-10).
+            ValueError: If the query is empty or whitespace-only, or
+                max_results is outside the supported range (1-10).
         """
-        if not query_str:
-            raise ValueError("Query cannot be empty")
+        if not isinstance(query_str, str) or not query_str.strip():
+            raise ValueError("Query must be a non-empty string")
+
+        query_str = query_str.strip()
 
         try:
             query = SearchQuery(query=query_str, max_results=max_results)
         except ValidationError as exc:
-            if any("query" in error["loc"] for error in exc.errors()):
-                raise ValueError("Query must be a non-empty string") from exc
             raise ValueError("max_results must be between 1 and 10") from exc
         results = await self._provider.search(query)
 
