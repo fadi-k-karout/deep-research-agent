@@ -66,7 +66,21 @@ class TestSearchService(unittest.IsolatedAsyncioTestCase):
 
     async def test_non_string_query_raises_value_error(self):
         with self.assertRaises(ValueError):
-            await self.service.execute_search(123)
+            await self.service.execute_search(123)  # type: ignore[arg-type]
+
+    async def test_whitespace_only_query_raises_value_error(self):
+        for bad in ("   ", "\t ", " \n "):
+            with self.assertRaises(ValueError):
+                await self.service.execute_search(bad)
+
+    async def test_query_is_stripped(self):
+        self.mock_provider.search.return_value = []
+
+        response = await self.service.execute_search("  ai agents  ")
+
+        self.assertEqual(response.query, "ai agents")
+        actual_query: SearchQuery = self.mock_provider.search.call_args[0][0]
+        self.assertEqual(actual_query.query, "ai agents")
 
 
 if __name__ == "__main__":

@@ -15,18 +15,11 @@ class TavilySearchProvider(BaseSearchProvider):
             query=query.query, max_results=query.max_results
         )
 
-        # Extract the list of result dicts
         raw_results = response.get("results", [])
-
-        items = [
-            SearchResultItem(
-                url=item["url"],
-                title=item.get("title", ""),
-                content=item.get("content", ""),
-                score=item.get("score") or 0.0,
+        if not isinstance(raw_results, list):
+            raise TypeError(
+                "Unexpected Tavily response: 'results' must be a list, "
+                f"got {type(raw_results).__name__}"
             )
-            for item in raw_results
-        ]
 
-        # Map explicitly to SearchResultItem schema
-        return items
+        return [SearchResultItem.model_validate(item) for item in raw_results]
