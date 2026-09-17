@@ -7,7 +7,12 @@ authors = [
     { name = "Fadi Karout", email = "fadi@example.com" }
 ]
 requires-python = ">=3.14"
-dependencies = []
+dependencies = [
+    "pydantic>=2.13.5",
+    "tavily-python>=0.8.3",
+    "exa-py>=2.21.0",
+    "python-dotenv>=1.0.1",
+]
 
 [project.scripts]
 deep-research-agent = "deep_research_agent:main"
