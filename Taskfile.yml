@@ -1,0 +1,33 @@
+version: '3'
+
+tasks:
+  default:
+    desc: Show available tasks
+    cmds:
+      - task --list
+
+  sync:
+    desc: Sync project dependencies
+    cmds:
+      - uv sync
+
+  run:
+    desc: Run the deep-research-agent CLI
+    cmds:
+      - uv run deep-research-agent
+
+  test:
+    desc: Run all tests (unit then integration)
+    cmds:
+      - task: test:unit
+      - task: test:integration
+
+  test:unit:
+    desc: Run unit tests
+    cmds:
+      - uv run python -m unittest discover -s tests/unit -v
+
+  test:integration:
+    desc: Run integration tests (auto-skip when API keys are unset)
+    cmds:
+      - uv run python -m unittest discover -s tests/integration -v
