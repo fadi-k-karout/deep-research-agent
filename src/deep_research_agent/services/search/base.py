@@ -1,4 +1,5 @@
 from abc import ABC, abstractmethod
+from enum import StrEnum
 
 from pydantic import BaseModel, Field
 
@@ -15,10 +16,34 @@ class SearchResultItem(BaseModel):
     score: float | None = Field(default=0.0, ge=0.0, le=1.0)
 
 
+class SearchErrorType(StrEnum):
+    validation = "validation"
+    network = "network"
+    auth = "auth"
+    rate_limit = "rate_limit"
+    provider = "provider"
+
+
+class SearchProviderError(Exception):
+    """Raised by providers after translating an SDK/network failure.
+
+    Carries a canonical ``error_type`` so the service can classify failures
+    without knowing anything about a specific SDK.
+    """
+
+    def __init__(self, error_type: SearchErrorType, detail: str):
+        super().__init__(detail)
+        self.error_type = error_type
+        self.detail = detail
+
+
 class SearchResponse(BaseModel):
     search_id: str
     query: str
     results: list[SearchResultItem]
+    success: bool = Field(default=True)
+    error: str | None = Field(default=None)
+    error_type: SearchErrorType | None = Field(default=None)
 
 
 class BaseSearchProvider(ABC):
@@ -28,10 +53,7 @@ class BaseSearchProvider(ABC):
         Perform a search using the given query and return the results.
 
         Raises:
-            ValueError: If the provider's API key is missing (raised at
-                construction time).
-            Exception: Provider errors (auth failures, rate limits, invalid
-                requests) and network errors are propagated as raised by the
-                underlying SDK; callers should catch these when retry/fallback
-                behaviour is required.
+            SearchProviderError: Provider and network failures are translated
+                by the provider into this canonical error type before they
+                reach the caller.
         """
