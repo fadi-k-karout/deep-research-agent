@@ -1,3 +1,5 @@
+import re
+
 import httpx
 from exa_py import AsyncExa
 from exa_py.api import Result
@@ -11,6 +13,22 @@ from .base import (
     SearchQuery,
     SearchResultItem,
 )
+
+_HTTP_STATUS_CODE = re.compile(r"Request failed with status code (\d{3})")
+
+
+def _classify_http_error(exc: ValueError) -> SearchErrorType | None:
+    match = _HTTP_STATUS_CODE.search(str(exc))
+    if match is None:
+        return None
+    status = int(match.group(1))
+    if status == 401:
+        return SearchErrorType.auth
+    if status == 429:
+        return SearchErrorType.rate_limit
+    if 500 <= status < 600:
+        return SearchErrorType.network
+    return SearchErrorType.provider
 
 
 class ExaSearchProvider(BaseSearchProvider):
@@ -30,19 +48,19 @@ class ExaSearchProvider(BaseSearchProvider):
                 num_results=query.max_results,
                 contents={"text": {"max_characters": self._content_max_chars}},
             )
+            return [
+                SearchResultItem(
+                    url=result.url,
+                    title=result.title or "",
+                    content=ExaSearchProvider._extract_content(result),
+                    score=result.score or 0.0,
+                )
+                for result in response.results
+            ]
         except (httpx.TimeoutException, httpx.ConnectError) as exc:
             raise SearchProviderError(SearchErrorType.network, str(exc)) from exc
+        except ValueError as exc:
+            error_type = _classify_http_error(exc) or SearchErrorType.provider
+            raise SearchProviderError(error_type, str(exc)) from exc
         except Exception as exc:
             raise SearchProviderError(SearchErrorType.provider, str(exc)) from exc
-
-        items = [
-            SearchResultItem(
-                url=result.url,
-                title=result.title or "",
-                content=ExaSearchProvider._extract_content(result),
-                score=result.score or 0.0,
-            )
-            for result in response.results
-        ]
-
-        return items

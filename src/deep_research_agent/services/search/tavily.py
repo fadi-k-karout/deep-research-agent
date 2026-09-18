@@ -1,4 +1,5 @@
 import httpx
+from pydantic import ValidationError
 from tavily import (
     AsyncTavilyClient,
     InvalidAPIKeyError,
@@ -50,4 +51,7 @@ class TavilySearchProvider(BaseSearchProvider):
                 f"got {type(raw_results).__name__}",
             )
 
-        return [SearchResultItem.model_validate(item) for item in raw_results]
+        try:
+            return [SearchResultItem.model_validate(item) for item in raw_results]
+        except ValidationError as exc:
+            raise SearchProviderError(SearchErrorType.provider, str(exc)) from exc
