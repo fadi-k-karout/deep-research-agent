@@ -180,6 +180,31 @@ class TestSearchService(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.mock_provider.search.call_count, 2)
         self.assertIsNone(response.error_type)
 
+    async def test_batch_search_returns_response_per_query_without_cancelling(self):
+        self.mock_provider.search.side_effect = self._fail_for_queries(
+            failing={"bad-key": SearchErrorType.auth}
+        )
+
+        responses = await self.service.execute_batch_search(
+            ["good", "bad-key", "", "  padded  "]
+        )
+
+        self.assertEqual(len(responses), 4)
+        self.assertTrue(responses[0].success)
+        self.assert_error_response(responses[1], SearchErrorType.auth)
+        self.assert_error_response(responses[2], SearchErrorType.validation)
+        self.assertTrue(responses[3].success)
+        self.assertEqual(responses[3].query, "padded")
+
+    def _fail_for_queries(self, failing: dict[str, SearchErrorType]):
+        async def _search(query: SearchQuery):
+            error_type = failing.get(query.query)
+            if error_type is not None:
+                raise SearchProviderError(error_type, f"{error_type} error")
+            return []
+
+        return _search
+
 
 if __name__ == "__main__":
     unittest.main()
