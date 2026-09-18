@@ -1,3 +1,4 @@
+import asyncio
 import logging
 from uuid import uuid4
 
@@ -121,3 +122,8 @@ class SearchService:
             error=error,
             error_type=error_type,
         )
+
+    async def execute_batch_search(self, queries: list[str]) -> list[SearchResponse]:
+        async with asyncio.TaskGroup() as tg:
+            tasks = [tg.create_task(self.execute_search(q)) for q in queries]
+        return [task.result() for task in tasks]
