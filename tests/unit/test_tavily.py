@@ -1,8 +1,6 @@
 import unittest
 from unittest.mock import AsyncMock, patch
 
-from pydantic import ValidationError
-
 from deep_research_agent.services.search.base import (
     SearchErrorType,
     SearchProviderError,
@@ -64,16 +62,18 @@ class TestTavilySearchProvider(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(results[0].url, "https://example.com/page1")
         self.assertEqual(results[0].score, 0.8)
 
-    async def test_missing_required_field_raises_validation_error(self):
+    async def test_missing_required_field_raises_provider_error(self):
         payload = {"results": [{"url": "https://example.com", "title": "No content"}]}
 
         with (
             patch.object(
                 self.provider._client, "search", new=AsyncMock(return_value=payload)
             ),
-            self.assertRaises(ValidationError),
+            self.assertRaises(SearchProviderError) as ctx,
         ):
             await self.provider.search(SearchQuery(query="agents"))
+
+        self.assertIs(ctx.exception.error_type, SearchErrorType.provider)
 
 
 if __name__ == "__main__":

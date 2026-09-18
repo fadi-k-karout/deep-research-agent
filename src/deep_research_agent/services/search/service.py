@@ -36,8 +36,11 @@ def _is_retryable(exc: BaseException) -> bool:
 
 
 class SearchService:
-    def __init__(self, provider: BaseSearchProvider):
+    def __init__(self, provider: BaseSearchProvider, max_concurrency: int = 5):
+        if max_concurrency < 1:
+            raise ValueError("max_concurrency must be >= 1")
         self._provider = provider
+        self._max_concurrency = max_concurrency
 
     async def execute_search(
         self, query_str: str, max_results: int = 5
@@ -124,6 +127,24 @@ class SearchService:
         )
 
     async def execute_batch_search(self, queries: list[str]) -> list[SearchResponse]:
+        """Execute every query and return one SearchResponse per query.
+
+        All queries are run concurrently, but at most ``max_concurrency``
+        searches are in flight at once (see :meth:`__init__`). Each query
+        keeps its existing retry behavior.
+
+        Args:
+            queries: The search query strings.
+
+        Returns:
+            list[SearchResponse]: One response per query, in the same order.
+        """
+        semaphore = asyncio.Semaphore(self._max_concurrency)
+
+        async def _run_bounded(query: str) -> SearchResponse:
+            async with semaphore:
+                return await self.execute_search(query)
+
         async with asyncio.TaskGroup() as tg:
-            tasks = [tg.create_task(self.execute_search(q)) for q in queries]
+            tasks = [tg.create_task(_run_bounded(q)) for q in queries]
         return [task.result() for task in tasks]

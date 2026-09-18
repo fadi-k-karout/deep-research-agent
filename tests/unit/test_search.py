@@ -1,3 +1,4 @@
+import asyncio
 import unittest
 from unittest.mock import AsyncMock
 
@@ -195,6 +196,29 @@ class TestSearchService(unittest.IsolatedAsyncioTestCase):
         self.assert_error_response(responses[2], SearchErrorType.validation)
         self.assertTrue(responses[3].success)
         self.assertEqual(responses[3].query, "padded")
+
+    async def test_batch_search_bounds_concurrency(self):
+        active = 0
+        max_active = 0
+        lock = asyncio.Lock()
+
+        async def _search(query: SearchQuery) -> list[SearchResultItem]:
+            nonlocal active, max_active
+            async with lock:
+                active += 1
+                max_active = max(max_active, active)
+            await asyncio.sleep(0.05)
+            async with lock:
+                active -= 1
+            return []
+
+        self.mock_provider.search.side_effect = _search
+        self.service = SearchService(provider=self.mock_provider, max_concurrency=2)
+
+        responses = await self.service.execute_batch_search(["a", "b", "c", "d", "e"])
+
+        self.assertEqual(len(responses), 5)
+        self.assertLessEqual(max_active, 2)
 
     def _fail_for_queries(self, failing: dict[str, SearchErrorType]):
         async def _search(query: SearchQuery):
