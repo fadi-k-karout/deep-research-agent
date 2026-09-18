@@ -3,7 +3,12 @@ from unittest.mock import AsyncMock, patch
 
 from pydantic import ValidationError
 
-from deep_research_agent.services.search.base import SearchQuery, SearchResultItem
+from deep_research_agent.services.search.base import (
+    SearchErrorType,
+    SearchProviderError,
+    SearchQuery,
+    SearchResultItem,
+)
 from deep_research_agent.services.search.tavily import TavilySearchProvider
 
 
@@ -11,7 +16,7 @@ class TestTavilySearchProvider(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
         self.provider = TavilySearchProvider(api_key="test-key")
 
-    async def test_invalid_results_raises_type_error(self):
+    async def test_invalid_results_raises_provider_error(self):
         for payload in ({"results": {}}, {"results": "oops"}):
             with (
                 self.subTest(payload=payload),
@@ -20,9 +25,11 @@ class TestTavilySearchProvider(unittest.IsolatedAsyncioTestCase):
                     "search",
                     new=AsyncMock(return_value=payload),
                 ),
-                self.assertRaises(TypeError),
+                self.assertRaises(SearchProviderError) as ctx,
             ):
                 await self.provider.search(SearchQuery(query="agents"))
+
+            self.assertIs(ctx.exception.error_type, SearchErrorType.provider)
 
     async def test_empty_results_allowed(self):
         with patch.object(
