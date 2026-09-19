@@ -134,6 +134,7 @@ source = { editable = "." }
 dependencies = [
     { name = "exa-py" },
     { name = "httpx" },
+    { name = "openai" },
     { name = "pydantic" },
     { name = "python-dotenv" },
     { name = "tavily-python" },
@@ -144,6 +145,7 @@ dependencies = [
 requires-dist = [
     { name = "exa-py", specifier = ">=2.21.0" },
     { name = "httpx", specifier = ">=0.28.1" },
+    { name = "openai", specifier = ">=3.14.1" },
     { name = "pydantic", specifier = ">=2.13.5" },
     { name = "python-dotenv", specifier = ">=1.0.1" },
     { name = "tavily-python", specifier = ">=0.8.3" },
