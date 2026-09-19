@@ -21,3 +21,11 @@ def tavily_api_key() -> str:
 
 def exa_api_key() -> str:
     return _require("EXA_API_KEY", "Exa Search")
+
+
+def openai_api_key() -> str:
+    return _require("OPENAI_API_KEY", "OpenAI")
+
+
+def openrouter_api_key() -> str:
+    return _require("OPENROUTER_API_KEY", "OpenRouter")
