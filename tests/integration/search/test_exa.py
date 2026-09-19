@@ -1,8 +1,7 @@
 import unittest
 
 from deep_research_agent.services.search.exa import ExaSearchProvider
-
-from .base import BaseProviderIntegrationTest
+from tests.integration.search.base import BaseProviderIntegrationTest
 
 
 class TestExaIntegration(BaseProviderIntegrationTest):
