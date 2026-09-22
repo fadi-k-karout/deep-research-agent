@@ -1,0 +1,128 @@
+/* ── App shell ──────────────────────────────────────────────────────────── */
+
+DeepResearchApp {
+    layout: vertical;
+}
+
+#main {
+    height: 1fr;
+    padding: 0 1;
+}
+
+/* ── Settings (CollapsibleSettings) ────────────────────────────────────── */
+
+#settings {
+    height: auto;
+}
+
+/* ── Tabs ───────────────────────────────────────────────────────────────── */
+
+TabbedContent {
+    height: 1fr;
+}
+
+/* ── Progress tab layout ────────────────────────────────────────────────── */
+
+#progress-layout {
+    height: 1fr;
+}
+
+/* Progress feed: full-width, takes remaining vertical space */
+#feed {
+    height: 1fr;
+    border: round $primary;
+    padding: 0 2;
+}
+
+/* Bottom findings row — hidden until the first finding arrives */
+#findings-area {
+    display: none;
+    height: 12;
+    border-top: solid $border;
+}
+
+/* ── FindingsList ───────────────────────────────────────────────────────── */
+
+#findings {
+    width: 1fr;
+    border: none;
+    border-right: solid $border;
+    padding: 0;
+}
+
+#findings > ListItem {
+    padding: 0 1;
+    height: 1;
+}
+
+#findings > ListItem.--highlight {
+    border-left: thick $accent;
+    background: $boost;
+}
+
+.finding-title {
+    color: $text;
+}
+
+/* ── FindingDetailPane ──────────────────────────────────────────────────── */
+
+#finding-detail {
+    width: 2fr;
+    padding: 0 2;
+}
+
+#detail-title {
+    text-style: bold;
+    color: $accent;
+    margin-bottom: 1;
+}
+
+#detail-meta {
+    color: $text-muted;
+    margin-top: 1;
+}
+
+/* ── Start button ───────────────────────────────────────────────────────── */
+
+#start {
+    width: 12;
+    background: transparent;
+    color: $accent;
+    border: tall $accent;
+    text-style: bold;
+}
+
+#start:hover {
+    background: $accent 20%;
+    color: $accent;
+    border: tall $accent;
+}
+
+#start:focus {
+    background: $accent 15%;
+    border: tall $accent;
+}
+
+#start:disabled {
+    color: $text-muted;
+    border: tall $border;
+    background: transparent;
+}
+
+/* ── Report tab ─────────────────────────────────────────────────────────── */
+
+#report {
+    height: 1fr;
+    overflow-y: auto;
+    scrollbar-size-vertical: 1;
+    padding: 0 2;
+}
+
+/* ── Status bar ─────────────────────────────────────────────────────────── */
+
+#status {
+    height: 3;
+    padding: 0 2;
+    background: $panel;
+    border-top: solid $border;
+}
