@@ -1,4 +1,4 @@
-version: '3'
+version: "3"
 
 tasks:
   default:
@@ -12,9 +12,14 @@ tasks:
       - uv sync
 
   run:
-    desc: Run the deep-research-agent CLI
+    desc: "Run the deep-research-agent CLI. Extra CLI flags go via CLI_ARGS, e.g. task run -- --tui"
     cmds:
-      - uv run deep-research-agent
+      - uv run deep-research-agent {{.CLI_ARGS}}
+
+  run:tui:
+    desc: "Run the deep-research-agent TUI (--tui). Extra flags via CLI_ARGS, e.g. task run:tui -- --max-iterations 10"
+    cmds:
+      - uv run deep-research-agent --tui {{.CLI_ARGS}}
 
   test:
     desc: Run all tests (unit then integration)
