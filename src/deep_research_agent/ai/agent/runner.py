@@ -5,6 +5,21 @@ from pydantic import BaseModel, Field, model_validator
 
 from deep_research_agent.ai.llm.base import BaseLLMProvider, LLMRequest
 from deep_research_agent.ai.state import Finding, ResearchState
+from deep_research_agent.events import (
+    AgentEvent,
+    EventEmitter,
+    EventError,
+    FindingExtracted,
+    IterationCompleted,
+    PlanCreated,
+    ReportReady,
+    RunStarted,
+    RunTerminated,
+    SearchCompleted,
+    SearchResultFound,
+    SearchStarted,
+    SynthesisStarted,
+)
 from deep_research_agent.services.search.base import (
     SearchResponse,
     SearchResultItem,
@@ -90,11 +105,18 @@ class AgentRunner:
         llm: BaseLLMProvider,
         max_iterations: int = 5,
         stall_threshold: int = 2,
+        events: EventEmitter | None = None,
     ):
         self.search_service = search_service
         self.llm = llm
         self.max_iterations = max_iterations
         self.stall_threshold = stall_threshold
+        self.events = events
+        self._current_iteration = 0
+
+    async def _emit(self, event: AgentEvent) -> None:
+        if self.events is not None:
+            await self.events.emit(event)
 
     async def run(self, prompt: str) -> ResearchState:
         """Main loop of the agent runner."""
@@ -104,23 +126,38 @@ class AgentRunner:
         )
 
         logger.info("Running agent (prompt_length=%d)", len(prompt))
+        await self._emit(RunStarted(prompt=prompt, max_iterations=self.max_iterations))
 
         while not state.is_complete and state.current_iteration < state.max_iterations:
             state.current_iteration += 1
+            self._current_iteration = state.current_iteration
             logger.info(f"Current iteration: {state.current_iteration}")
 
             plan = await self._plan_next_actions(state)
 
             if plan is None:
                 state.termination_reason = "planning_failed"
+                await self._emit(RunTerminated(reason="planning_failed"))
                 break
+
+            await self._emit(
+                PlanCreated(
+                    iteration=state.current_iteration,
+                    queries=tuple(plan.queries),
+                    is_complete=plan.is_complete,
+                )
+            )
 
             if plan.is_complete:
                 state.is_complete = True
                 state.termination_reason = "complete"
+                await self._emit(RunTerminated(reason="complete"))
                 break
 
             queries = plan.queries
+            await self._emit(
+                SearchStarted(iteration=state.current_iteration, queries=tuple(queries))
+            )
 
             try:
                 search_response = await self.search_service.execute_batch_search(
@@ -129,11 +166,32 @@ class AgentRunner:
             except Exception:
                 logger.exception("Error during search; stopping.")
                 state.termination_reason = "search_error"
+                await self._emit(RunTerminated(reason="search_error"))
+                await self._emit(
+                    EventError(phase="search", message="Unexpected search error.")
+                )
                 break
 
             self._record_search_outcomes(state, queries, search_response)
+            await self._emit(
+                SearchCompleted(
+                    iteration=state.current_iteration,
+                    result_count=sum(
+                        len(response.results) for response in search_response
+                    ),
+                    failure_count=sum(
+                        1
+                        for response in search_response
+                        if not response.success or not response.results
+                    ),
+                )
+            )
 
             findings = await self._extract_findings(queries, search_response)
+            for finding in findings:
+                await self._emit(
+                    FindingExtracted(iteration=state.current_iteration, finding=finding)
+                )
             if findings:
                 state.findings.extend(findings)
                 state.stalled_iterations = 0
@@ -150,12 +208,26 @@ class AgentRunner:
                 if state.stalled_iterations >= self.stall_threshold:
                     logger.warning("No research progress; stopping early.")
                     state.termination_reason = "stalled"
+                    await self._emit(RunTerminated(reason="stalled"))
                     break
+
+            await self._emit(
+                IterationCompleted(
+                    iteration=state.current_iteration,
+                    total_findings=len(state.findings),
+                    stalled=not findings,
+                )
+            )
 
         if state.termination_reason is None and not state.is_complete:
             state.termination_reason = "max_iterations"
+            await self._emit(RunTerminated(reason="max_iterations"))
 
-        state.synthesized_report = await self._synthesize_report(state)
+        await self._emit(SynthesisStarted(findings_count=len(state.findings)))
+        state.synthesized_report, used_fallback = await self._synthesize_report(state)
+        await self._emit(
+            ReportReady(report=state.synthesized_report, fallback=used_fallback)
+        )
         logger.info("Research complete.")
         return state
 
@@ -216,6 +288,15 @@ class AgentRunner:
             logger.info(f"Skipping failed or empty response for query: {query}")
             return findings
 
+        for result in search_response.results:
+            await self._emit(
+                SearchResultFound(
+                    iteration=self._current_iteration or 0,
+                    query=query,
+                    result=result,
+                )
+            )
+
         batches = await asyncio.gather(
             *(
                 self._extract_from_result(query, result)
@@ -272,16 +353,18 @@ class AgentRunner:
             )
         return findings
 
-    async def _synthesize_report(self, state: ResearchState) -> str:
+    async def _synthesize_report(self, state: ResearchState) -> tuple[str, bool]:
         """Summarize all accumulated findings into a Markdown formatted report.
 
         When no findings were gathered, synthesize nothing: a fallback report
         explains why instead of fabricating an empty narrative.
+
+        Returns the report and whether a fallback was used.
         """
         if not state.findings:
             report = self._build_fallback_report(state)
             state.synthesized_report = report
-            return report
+            return report, True
 
         try:
             response = await self.llm.generate(
@@ -295,13 +378,13 @@ class AgentRunner:
             logger.exception("Report synthesis failed; using fallback report.")
             report = self._build_fallback_report(state)
             state.synthesized_report = report
-            return report
+            return report, True
 
         report = response.content
         if state.failed_searches:
             report = f"{report}\n\n{self._build_research_notes(state)}"
         state.synthesized_report = report
-        return report
+        return report, False
 
     def _build_plan_prompt(self, state: ResearchState) -> str:
         findings = self._format_findings(state)
