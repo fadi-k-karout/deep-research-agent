@@ -46,6 +46,9 @@ def main() -> None:
     )
     args = parser.parse_args()
 
+    if args.max_iterations <= 0:
+        parser.error("--max-iterations must be a positive integer")
+
     prompt = args.prompt
     if not prompt:
         prompt = input("Research prompt: ")

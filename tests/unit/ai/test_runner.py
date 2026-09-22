@@ -56,6 +56,7 @@ class TestAgentRunner(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(state.current_iteration, 2)
         self.assertTrue(state.is_complete)
+        self.assertEqual(state.termination_reason, "complete")
         self.assertEqual(len(state.findings), 1)
         finding = state.findings[0]
         self.assertEqual(finding.title, "T")
@@ -118,11 +119,13 @@ class TestAgentRunner(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(state.current_iteration, 3)
         self.assertEqual(state.stalled_iterations, 0)
+        self.assertEqual(state.termination_reason, "max_iterations")
+        self.assertFalse(state.is_complete)
         self.assertEqual(state.synthesized_report, "# Research Report")
 
-    async def test_no_queries_planned_stops_immediately(self):
+    async def test_stops_immediately_when_planner_says_complete(self):
         self.llm.generate.side_effect = [
-            _llm_response(PlannedQueries(queries=[], is_complete=False)),
+            _llm_response(PlannedQueries(queries=[], is_complete=True)),
             _llm_response("# Research Report"),
         ]
 
@@ -130,6 +133,7 @@ class TestAgentRunner(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(state.current_iteration, 1)
         self.assertTrue(state.is_complete)
+        self.assertEqual(state.termination_reason, "complete")
         self.assertEqual(state.findings, [])
         self.assertEqual(self.llm.generate.await_count, 1)
         report = state.synthesized_report
@@ -148,7 +152,8 @@ class TestAgentRunner(unittest.IsolatedAsyncioTestCase):
         state = await self.runner.run("Research x")
 
         self.assertEqual(state.current_iteration, 1)
-        self.assertTrue(state.is_complete)
+        self.assertFalse(state.is_complete)
+        self.assertEqual(state.termination_reason, "planning_failed")
         self.assertEqual(state.findings, [])
         self.assertEqual(self.llm.generate.await_count, 2)
         report = state.synthesized_report
@@ -300,7 +305,8 @@ class TestAgentRunner(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(state.current_iteration, 2)
         self.assertEqual(state.stalled_iterations, 2)
         self.assertEqual(state.failed_searches, 2)
-        self.assertTrue(state.is_complete)
+        self.assertFalse(state.is_complete)
+        self.assertEqual(state.termination_reason, "stalled")
         report = state.synthesized_report
         assert report is not None
         self.assertIn("q: no results returned", report)
@@ -337,6 +343,37 @@ class TestAgentRunner(unittest.IsolatedAsyncioTestCase):
         self.assertIn("bad: Search provider failed", report)
         synthesis_prompt = self.llm.generate.call_args_list[3].args[0].prompt
         self.assertIn("bad: Search provider failed", synthesis_prompt)
+
+    def test_planned_queries_rejects_inconsistent_plans(self):
+        with self.assertRaises(ValueError):
+            PlannedQueries(queries=[], is_complete=False)
+        with self.assertRaises(ValueError):
+            PlannedQueries(queries=["  ", "q"], is_complete=False)
+        with self.assertRaises(ValueError):
+            PlannedQueries(queries=["q"], is_complete=True)
+        with self.assertRaises(ValueError):
+            PlannedQueries(queries=["a", "b", "c", "d"], is_complete=False)
+
+    def test_planned_queries_normalizes_and_accepts_valid_plans(self):
+        plan = PlannedQueries(queries=["  what is x  "], is_complete=False)
+        self.assertEqual(plan.queries, ["what is x"])
+        self.assertTrue(PlannedQueries(queries=[], is_complete=True).is_complete)
+
+    async def test_search_error_sets_dedicated_termination(self):
+        self.llm.generate.side_effect = [
+            _llm_response(PlannedQueries(queries=["q"], is_complete=False)),
+            _llm_response("# Research Report"),
+        ]
+        self.search.execute_batch_search.side_effect = RuntimeError("provider down")
+
+        state = await self.runner.run("Research x")
+
+        self.assertEqual(state.current_iteration, 1)
+        self.assertFalse(state.is_complete)
+        self.assertEqual(state.termination_reason, "search_error")
+        report = state.synthesized_report
+        assert report is not None
+        self.assertIn("No findings were gathered", report)
 
 
 if __name__ == "__main__":

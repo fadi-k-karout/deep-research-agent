@@ -34,7 +34,14 @@ class ResearchState(BaseModel):
     )
     is_complete: bool = Field(
         default=False,
-        description="Flag indicating whether the agent satisfied its objective.",
+        description="True only when the planner confirmed the objective is satisfied.",
+    )
+    termination_reason: str | None = Field(
+        default=None,
+        description=(
+            "Why the run ended: 'complete', 'search_error', 'stalled', "
+            "'planning_failed', or 'max_iterations'."
+        ),
     )
 
     failed_searches: int = Field(

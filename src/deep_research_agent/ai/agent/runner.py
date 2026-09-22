@@ -1,7 +1,7 @@
 import asyncio
 import logging
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from deep_research_agent.ai.llm.base import BaseLLMProvider, LLMRequest
 from deep_research_agent.ai.state import Finding, ResearchState
@@ -52,6 +52,21 @@ class PlannedQueries(BaseModel):
         description="True when the accumulated findings satisfy the objective.",
     )
 
+    @model_validator(mode="after")
+    def _check_queries_vs_completion(self) -> PlannedQueries:
+        cleaned = [query.strip() for query in self.queries]
+        if any(not query for query in cleaned):
+            raise ValueError(
+                "queries must not contain empty or whitespace-only entries"
+            )
+        if self.is_complete:
+            if cleaned:
+                raise ValueError("queries must be empty when is_complete is true")
+        elif not 1 <= len(cleaned) <= 3:
+            raise ValueError("incomplete plans must propose between 1 and 3 queries")
+        self.queries = cleaned
+        return self
+
 
 class FindingDraft(BaseModel):
     """A raw extracted finding before provenance is attached."""
@@ -88,18 +103,24 @@ class AgentRunner:
             max_iterations=self.max_iterations,
         )
 
-        logger.info(f"Running agent with prompt: {prompt}")
+        logger.info("Running agent (prompt_length=%d)", len(prompt))
 
         while not state.is_complete and state.current_iteration < state.max_iterations:
             state.current_iteration += 1
             logger.info(f"Current iteration: {state.current_iteration}")
 
-            queries = await self._plan_next_actions(state)
+            plan = await self._plan_next_actions(state)
 
-            if not queries:
-                logger.info("No actions planned, stopping.")
-                state.is_complete = True
+            if plan is None:
+                state.termination_reason = "planning_failed"
                 break
+
+            if plan.is_complete:
+                state.is_complete = True
+                state.termination_reason = "complete"
+                break
+
+            queries = plan.queries
 
             try:
                 search_response = await self.search_service.execute_batch_search(
@@ -107,7 +128,7 @@ class AgentRunner:
                 )
             except Exception:
                 logger.exception("Error during search; stopping.")
-                state.is_complete = True
+                state.termination_reason = "search_error"
                 break
 
             self._record_search_outcomes(state, queries, search_response)
@@ -128,11 +149,13 @@ class AgentRunner:
                 )
                 if state.stalled_iterations >= self.stall_threshold:
                     logger.warning("No research progress; stopping early.")
-                    state.is_complete = True
+                    state.termination_reason = "stalled"
                     break
 
+        if state.termination_reason is None and not state.is_complete:
+            state.termination_reason = "max_iterations"
+
         state.synthesized_report = await self._synthesize_report(state)
-        state.is_complete = True
         logger.info("Research complete.")
         return state
 
@@ -154,25 +177,23 @@ class AgentRunner:
             if message not in state.search_failures:
                 state.search_failures.append(message)
 
-    async def _plan_next_actions(self, state: ResearchState) -> list[str]:
+    async def _plan_next_actions(self, state: ResearchState) -> PlannedQueries | None:
         """Decide the next queries based on the current findings.
 
-        Marks the state complete when the planner determines the objective has
-        been satisfied. Retries once on LLM failure before stopping defensively.
+        Returns None (activation of a dedicated termination) when the planner
+        cannot produce a valid plan after retrying. The caller decides whether
+        the plan marks the objective complete.
         """
         for attempt in range(2):
             try:
-                plan = await self._generate_plan(state)
-                state.is_complete = plan.is_complete
-                return plan.queries
+                return await self._generate_plan(state)
             except Exception:
                 if attempt == 0:
                     logger.warning("Planning failed; retrying once.")
                     continue
                 logger.exception("Planning failed after retry; stopping research.")
 
-        state.is_complete = True
-        return []
+        return None
 
     async def _generate_plan(self, state: ResearchState) -> PlannedQueries:
         response = await self.llm.generate(
