@@ -30,7 +30,7 @@ class TestAgentRunnerIntegration(unittest.IsolatedAsyncioTestCase):
             self.runner.run("What is a vector database?"), timeout=180
         )
 
-        self.assertTrue(state.is_complete)
+        self.assertIsNotNone(state.termination_reason)
         self.assertLessEqual(state.current_iteration, 1)
         self.assertGreater(len(state.findings), 0)
         report = state.synthesized_report
