@@ -1,6 +1,8 @@
 import asyncio
 import unittest
 
+from pydantic import ValidationError
+
 from deep_research_agent.ai.state import Finding
 from deep_research_agent.events import (
     AgentEvent,
@@ -8,6 +10,7 @@ from deep_research_agent.events import (
     FindingExtracted,
     RunStarted,
 )
+from deep_research_agent.services.search.base import SearchResultItem
 
 
 class TestEventEmitter(unittest.IsolatedAsyncioTestCase):
@@ -65,6 +68,17 @@ class TestEventEmitter(unittest.IsolatedAsyncioTestCase):
         )
         with self.assertRaises(AttributeError):
             event.iteration = 2  # type: ignore[misc]
+
+    def test_finding_and_search_result_payloads_are_frozen(self):
+        finding = Finding(
+            title="T", content="C", source_url="https://example.com", query_used="q"
+        )
+        with self.assertRaises(ValidationError):
+            finding.content = "mutated"  # type: ignore[misc]
+
+        result = SearchResultItem(title="T", url="https://example.com", content="C")
+        with self.assertRaises(ValidationError):
+            result.content = "mutated"  # type: ignore[misc]
 
 
 if __name__ == "__main__":

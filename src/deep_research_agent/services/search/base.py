@@ -1,7 +1,7 @@
 from abc import ABC, abstractmethod
 from enum import StrEnum
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class SearchQuery(BaseModel):
@@ -10,6 +10,8 @@ class SearchQuery(BaseModel):
 
 
 class SearchResultItem(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
     title: str
     url: str
     content: str

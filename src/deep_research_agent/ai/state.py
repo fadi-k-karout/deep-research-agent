@@ -1,10 +1,12 @@
 from datetime import UTC, datetime
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class Finding(BaseModel):
     """Represents an extracted piece of information with source provenance."""
+
+    model_config = ConfigDict(frozen=True)
 
     title: str
     content: str

@@ -112,7 +112,6 @@ class AgentRunner:
         self.max_iterations = max_iterations
         self.stall_threshold = stall_threshold
         self.events = events
-        self._current_iteration = 0
 
     async def _emit(self, event: AgentEvent) -> None:
         if self.events is not None:
@@ -130,13 +129,19 @@ class AgentRunner:
 
         while not state.is_complete and state.current_iteration < state.max_iterations:
             state.current_iteration += 1
-            self._current_iteration = state.current_iteration
             logger.info(f"Current iteration: {state.current_iteration}")
 
             plan = await self._plan_next_actions(state)
 
             if plan is None:
                 state.termination_reason = "planning_failed"
+                await self._emit(
+                    IterationCompleted(
+                        iteration=state.current_iteration,
+                        total_findings=len(state.findings),
+                        stalled=True,
+                    )
+                )
                 await self._emit(RunTerminated(reason="planning_failed"))
                 break
 
@@ -151,6 +156,13 @@ class AgentRunner:
             if plan.is_complete:
                 state.is_complete = True
                 state.termination_reason = "complete"
+                await self._emit(
+                    IterationCompleted(
+                        iteration=state.current_iteration,
+                        total_findings=len(state.findings),
+                        stalled=False,
+                    )
+                )
                 await self._emit(RunTerminated(reason="complete"))
                 break
 
@@ -166,6 +178,13 @@ class AgentRunner:
             except Exception:
                 logger.exception("Error during search; stopping.")
                 state.termination_reason = "search_error"
+                await self._emit(
+                    IterationCompleted(
+                        iteration=state.current_iteration,
+                        total_findings=len(state.findings),
+                        stalled=True,
+                    )
+                )
                 await self._emit(RunTerminated(reason="search_error"))
                 await self._emit(
                     EventError(phase="search", message="Unexpected search error.")
@@ -187,7 +206,9 @@ class AgentRunner:
                 )
             )
 
-            findings = await self._extract_findings(queries, search_response)
+            findings = await self._extract_findings(
+                queries, search_response, state.current_iteration
+            )
             for finding in findings:
                 await self._emit(
                     FindingExtracted(iteration=state.current_iteration, finding=finding)
@@ -208,6 +229,13 @@ class AgentRunner:
                 if state.stalled_iterations >= self.stall_threshold:
                     logger.warning("No research progress; stopping early.")
                     state.termination_reason = "stalled"
+                    await self._emit(
+                        IterationCompleted(
+                            iteration=state.current_iteration,
+                            total_findings=len(state.findings),
+                            stalled=True,
+                        )
+                    )
                     await self._emit(RunTerminated(reason="stalled"))
                     break
 
@@ -279,7 +307,7 @@ class AgentRunner:
         return response.content
 
     async def _extract_findings_from_single_response(
-        self, query: str, search_response: SearchResponse
+        self, query: str, search_response: SearchResponse, iteration: int
     ) -> list[Finding]:
         """Extract findings from the current query's results, in parallel."""
         findings: list[Finding] = []
@@ -291,7 +319,7 @@ class AgentRunner:
         for result in search_response.results:
             await self._emit(
                 SearchResultFound(
-                    iteration=self._current_iteration or 0,
+                    iteration=iteration,
                     query=query,
                     result=result,
                 )
@@ -343,13 +371,15 @@ class AgentRunner:
         return []
 
     async def _extract_findings(
-        self, queries: list[str], search_response: list[SearchResponse]
+        self, queries: list[str], search_response: list[SearchResponse], iteration: int
     ) -> list[Finding]:
         """Extract findings from the current query/queries results."""
         findings: list[Finding] = []
         for query, response in zip(queries, search_response):
             findings.extend(
-                await self._extract_findings_from_single_response(query, response)
+                await self._extract_findings_from_single_response(
+                    query, response, iteration
+                )
             )
         return findings
 
