@@ -1,3 +1,4 @@
+import asyncio
 import unittest
 from unittest.mock import AsyncMock
 
@@ -9,6 +10,7 @@ from deep_research_agent.ai.agent.runner import (
 )
 from deep_research_agent.ai.llm.base import BaseLLMProvider, LLMResponse
 from deep_research_agent.events import (
+    AgentEvent,
     EventEmitter,
     FindingExtracted,
     IterationCompleted,
@@ -42,7 +44,7 @@ class TestAgentRunnerEvents(unittest.IsolatedAsyncioTestCase):
         self.llm = AsyncMock(spec=BaseLLMProvider)
         self.search = AsyncMock(spec=SearchService)
         self.emitter = EventEmitter()
-        self.events: list[type] = []
+        self.events: list[AgentEvent] = []
         self.emitter.subscribe(self._record)
         self.runner = AgentRunner(
             search_service=self.search,
@@ -78,6 +80,7 @@ class TestAgentRunnerEvents(unittest.IsolatedAsyncioTestCase):
             FindingExtracted,
             IterationCompleted,
             PlanCreated,
+            IterationCompleted,
             RunTerminated,
             SynthesisStarted,
             ReportReady,
@@ -136,6 +139,11 @@ class TestAgentRunnerEvents(unittest.IsolatedAsyncioTestCase):
         terminated = [e for e in self.events if type(e) is RunTerminated]
         self.assertEqual(terminated[0].reason, "stalled")
         self.assertEqual(sum(1 for e in self.events if type(e) is PlanCreated), 2)
+        iterations = [e for e in self.events if type(e) is IterationCompleted]
+        self.assertTrue(iterations)
+        self.assertTrue(all(e.stalled for e in iterations))
+        types = [type(e) for e in self.events]
+        self.assertLess(types.index(IterationCompleted), types.index(RunTerminated))
 
     async def test_planning_failure_emits_termination(self):
         async def _side_effect(request):
@@ -149,6 +157,9 @@ class TestAgentRunnerEvents(unittest.IsolatedAsyncioTestCase):
 
         terminated = [e for e in self.events if type(e) is RunTerminated]
         self.assertEqual(terminated[0].reason, "planning_failed")
+        iterations = [e for e in self.events if type(e) is IterationCompleted]
+        self.assertEqual(len(iterations), 1)
+        self.assertTrue(iterations[0].stalled)
 
     async def test_stalled_iteration_sets_stalled_flag(self):
         self.runner = AgentRunner(
@@ -176,6 +187,24 @@ class TestAgentRunnerEvents(unittest.IsolatedAsyncioTestCase):
         iterations = [e for e in self.events if type(e) is IterationCompleted]
         self.assertGreaterEqual(len(iterations), 1)
         self.assertTrue(iterations[0].stalled)
+
+    async def test_concurrent_extraction_keeps_iteration_isolation(self):
+        async def _generate(request):
+            return _llm_response(ExtractedFindings(findings=[]))
+
+        self.llm.generate.side_effect = _generate
+
+        await asyncio.gather(
+            self.runner._extract_findings_from_single_response(
+                "q1", _search_response("q1", [_result(url="https://example.com/1")]), 1
+            ),
+            self.runner._extract_findings_from_single_response(
+                "q2", _search_response("q2", [_result(url="https://example.com/2")]), 7
+            ),
+        )
+
+        found = [e for e in self.events if type(e) is SearchResultFound]
+        self.assertEqual(sorted(e.iteration for e in found), [1, 7])
 
 
 if __name__ == "__main__":
