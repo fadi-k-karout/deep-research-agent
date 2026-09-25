@@ -1,14 +1,27 @@
 # Deep Research Agent
 
-A stateful, autonomous deep research engine built with Python, LangGraph, PostgreSQL (`pgvector`), and Playwright. Designed to execute long-horizon web investigation, maintain dual-layer memory, resolve knowledge conflicts, and generate cited markdown reports.
+A stateful, autonomous deep research engine that iterates on web searches, extracts findings, and synthesizes cited Markdown reports. Reports are persisted to a local SQLite database and can be reviewed later from the TUI.
 
 ## System Architecture
 
 The project is structured into four decoupled modules:
-1. **Orchestrator:** LangGraph state machine handling iteration loops, circuit breakers, and state checkpoints.
-2. **Search Service:** A web search service with support for multiple providers.
-3. **Memory Service** Support for short and long term memory.
- 
+1. **Orchestrator:** The `AgentRunner` iteration loop handling planning, search, extraction, synthesis, and termination reasons.
+2. **Search Service:** A web search service with support for multiple providers (Tavily, Exa).
+3. **Storage Service:** `ResearchAgentStorage` persists each finished report to a local SQLite database.
+4. **TUI:** A Textual interface with a Progress tab, a Report tab, and a Reports tab for browsing stored reports.
+
+## Report Storage
+
+Every completed run is saved to `deep_research_agent.db` (SQLite) in the working directory. The database file is created on first use and is excluded from version control.
+
+One storage instance is created per application session and passed explicitly to the TUI, the CLI, and the runner — there is no global database connection:
+
+```
+main() -> run_tui() -> DeepResearchApp -> build_runner() -> AgentRunner
+```
+
+The TUI loads stored reports when it starts and refreshes the list after each run. Select a report in the **Reports** tab (`ctrl+3`) to open it in the **Report** tab.
+
 ## Getting Started
 
 ### Prerequisites
