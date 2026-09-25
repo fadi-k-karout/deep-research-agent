@@ -13,6 +13,7 @@ from deep_research_agent.tui.widgets import (
     CollapsibleSettings,
     FindingDetailPane,
     FindingsList,
+    ReportDetailPanel,
     ReportList,
     StatusBar,
     StatusSnapshot,
@@ -419,6 +420,73 @@ class TestStatusBar(unittest.IsolatedAsyncioTestCase):
             )
             await pilot.pause()
             self.assertIn("▪", _widget_text(bar))
+
+
+# ── ReportDetailPanel ──────────────────────────────────────────────────────────
+
+
+class TestReportDetailPanel(unittest.IsolatedAsyncioTestCase):
+    def _make_app(self):
+        from textual.app import App, ComposeResult
+
+        class _App(App):
+            def compose(self) -> ComposeResult:
+                yield ReportDetailPanel(id="panel")
+
+        return _App
+
+    async def test_starts_in_placeholder_state(self):
+        """Panel shows placeholder markdown and empty title on mount."""
+        async with self._make_app()().run_test() as pilot:
+            panel = pilot.app.query_one("#panel", ReportDetailPanel)
+            from textual.widgets import Markdown, Static
+
+            md = panel.query_one("#report-content", Markdown)
+            title = panel.query_one("#report-title", Static)
+            self.assertIn("Select a report", md.source)
+            self.assertEqual(str(title.render()).strip(), "")
+
+    async def test_show_sets_title_and_content(self):
+        """show() updates both the title Static and the Markdown content."""
+        async with self._make_app()().run_test() as pilot:
+            panel = pilot.app.query_one("#panel", ReportDetailPanel)
+            from textual.widgets import Markdown, Static
+
+            report = _dummy_report(topic="My Topic", content="# Hello\n\nBody text.")
+            panel.show(report)
+            await pilot.pause()
+
+            title = panel.query_one("#report-title", Static)
+            md = panel.query_one("#report-content", Markdown)
+            self.assertIn("My Topic", str(title.render()))
+            self.assertIn("# Hello", md.source)
+            self.assertIn("Body text.", md.source)
+
+    async def test_clear_resets_title_and_content(self):
+        """clear() empties the title and restores the placeholder."""
+        async with self._make_app()().run_test() as pilot:
+            panel = pilot.app.query_one("#panel", ReportDetailPanel)
+            from textual.widgets import Markdown, Static
+
+            panel.show(_dummy_report(topic="Something", content="# Content"))
+            await pilot.pause()
+
+            panel.clear()
+            await pilot.pause()
+
+            title = panel.query_one("#report-title", Static)
+            md = panel.query_one("#report-content", Markdown)
+            self.assertEqual(str(title.render()).strip(), "")
+            self.assertIn("Select a report", md.source)
+
+    async def test_toggle_button_is_present(self):
+        """The ≡ toggle button is composed inside the panel."""
+        from textual.widgets import Button
+
+        async with self._make_app()().run_test() as pilot:
+            panel = pilot.app.query_one("#panel", ReportDetailPanel)
+            btn = panel.query_one("#toggle-sidebar", Button)
+            self.assertIsNotNone(btn)
 
 
 if __name__ == "__main__":

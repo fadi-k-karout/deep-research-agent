@@ -109,20 +109,69 @@ TabbedContent {
     background: transparent;
 }
 
-/* ── Report tab ─────────────────────────────────────────────────────────── */
+/* ── Reports tab (master-detail) ─────────────────────────────────────────── */
 
-#report {
+#reports-layout {
     height: 1fr;
-    overflow-y: auto;
-    scrollbar-size-vertical: 1;
-    padding: 0 2;
 }
 
-/* ── Reports tab ─────────────────────────────────────────────────────────── */
+#report-sidebar {
+    width: 28;
+    border-right: solid $border;
+    padding: 0;
+}
 
-#reports {
+#report-sidebar > ListItem {
+    padding: 0 1;
+    height: 1;
+}
+
+#report-sidebar > ListItem.--highlight {
+    border-left: thick $accent;
+    background: $boost;
+}
+
+/* ── ReportDetailPanel ──────────────────────────────────────────────────── */
+
+#report-panel {
+    width: 1fr;
     height: 1fr;
-    border: round $primary;
+}
+
+#report-topbar {
+    height: 3;
+    border-bottom: solid $border;
+    align-vertical: middle;
+}
+
+#toggle-sidebar {
+    width: 5;
+    min-width: 5;
+    background: transparent;
+    border: none;
+    color: $text-muted;
+}
+
+#toggle-sidebar:hover {
+    background: $boost;
+    color: $text;
+    border: none;
+}
+
+#report-title {
+    width: 1fr;
+    content-align: left middle;
+    height: 3;
+    padding: 0 1;
+    color: $text-muted;
+}
+
+#report-content-scroll {
+    height: 1fr;
+    scrollbar-size-vertical: 1;
+}
+
+#report-content {
     padding: 0 2;
 }
 

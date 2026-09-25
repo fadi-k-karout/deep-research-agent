@@ -18,7 +18,6 @@ from textual.widgets import (
     Header,
     Input,
     ListView,
-    Markdown,
     Select,
     TabbedContent,
     TabPane,
@@ -53,6 +52,7 @@ from deep_research_agent.tui.widgets import (
     FindingDetailPane,
     FindingsList,
     ProgressFeed,
+    ReportDetailPanel,
     ReportList,
     StatusBar,
     StatusSnapshot,
@@ -85,8 +85,8 @@ class DeepResearchApp(App):
         Binding("ctrl+q", "quit", "Quit"),
         Binding("ctrl+s", "start_run", "Start"),
         Binding("ctrl+1", "show_tab('tab-progress')", "Progress", show=True),
-        Binding("ctrl+2", "show_tab('tab-report')", "Report", show=True),
-        Binding("ctrl+3", "show_tab('tab-reports')", "Reports", show=True),
+        Binding("ctrl+2", "show_tab('tab-reports')", "Reports", show=True),
+        Binding("ctrl+b", "toggle_sidebar", "Toggle sidebar", show=True),
         Binding("ctrl+f", "focus_feed", "Feed", show=True),
         Binding("ctrl+x", "toggle_settings", "Settings", show=True, priority=True),
         Binding("escape", "close_detail", "Close detail", show=False),
@@ -134,10 +134,12 @@ class DeepResearchApp(App):
                     with Horizontal(id="findings-area"):
                         yield FindingsList(id="findings")
                         yield FindingDetailPane(id="finding-detail")
-                with TabPane("📄 Report", id="tab-report"):
-                    yield Markdown("_No report yet._", id="report")
-                with TabPane("📑 Reports", id="tab-reports"):
-                    yield ReportList(id="reports")
+                with (
+                    TabPane("📑 Reports", id="tab-reports"),
+                    Horizontal(id="reports-layout"),
+                ):
+                    yield ReportList(id="report-sidebar")
+                    yield ReportDetailPanel(id="report-panel")
 
         yield StatusBar(id="status")
         yield Footer()
@@ -159,7 +161,7 @@ class DeepResearchApp(App):
             return []
 
     def _refresh_reports(self) -> None:
-        self.query_one("#reports", ReportList).set_reports(self._load_reports())
+        self.query_one("#report-sidebar", ReportList).set_reports(self._load_reports())
 
     @on(ListView.Selected, "#findings")
     def _on_finding_selected(self, event: ListView.Selected) -> None:
@@ -167,13 +169,14 @@ class DeepResearchApp(App):
         if finding is not None:
             self.query_one("#finding-detail", FindingDetailPane).update(finding)
 
-    @on(ListView.Selected, "#reports")
-    async def _on_report_selected(self, event: ListView.Selected) -> None:
-        report = self.query_one("#reports", ReportList).reports_map.get(event.item)
+    @on(ListView.Selected, "#report-sidebar")
+    def _on_report_selected(self, event: ListView.Selected) -> None:
+        report = self.query_one("#report-sidebar", ReportList).reports_map.get(
+            event.item
+        )
         if report is None:
             return
-        self.action_show_tab("tab-report")
-        await self._set_report(report.content)
+        self.query_one("#report-panel", ReportDetailPanel).show(report)
 
     # ── actions ─────────────────────────────────────────────────────
 
@@ -191,6 +194,14 @@ class DeepResearchApp(App):
         detail = self.query_one("#finding-detail", FindingDetailPane)
         if detail.display:
             detail.clear()
+
+    def action_toggle_sidebar(self) -> None:
+        sidebar = self.query_one("#report-sidebar", ReportList)
+        sidebar.display = not sidebar.display
+
+    @on(Button.Pressed, "#toggle-sidebar")
+    def _on_toggle_sidebar_pressed(self, _event: Button.Pressed) -> None:
+        self.action_toggle_sidebar()
 
     @on(Input.Submitted, "#prompt")
     def _on_prompt_submitted(self, _event: Input.Submitted) -> None:
@@ -307,21 +318,6 @@ class DeepResearchApp(App):
         if message is not None:
             self.post_message(message)
 
-    async def _set_report(self, markdown: str) -> None:
-        """Render a Markdown report into the Report tab.
-
-        A fresh widget is mounted in place of the old one rather than calling
-        ``Markdown.update``: in Textual 8.2.8 the report would otherwise render
-        as an empty pane (the Markdown only paints reliably when mounted into
-        a visible tab, which is guaranteed by the caller).
-        """
-        pane = self.query_one("#tab-report", TabPane)
-        old = self.query_one("#report", Markdown)
-        await old.remove()
-        report = Markdown(markdown, id="report")
-        await pane.mount(report)
-        report.scroll_home()
-
     # ── message handlers ────────────────────────────────────────────
 
     @on(RunnerMessage)
@@ -348,6 +344,9 @@ class DeepResearchApp(App):
     @on(RefreshReportsMessage)
     def _handle_refresh_reports(self, _message: RefreshReportsMessage) -> None:
         self._refresh_reports()
+        sidebar = self.query_one("#report-sidebar", ReportList)
+        if sidebar.children:
+            sidebar.index = 0
 
     def _on_run_started(self, event: RunStarted) -> None:
         self.query_one("#feed", ProgressFeed).add_line(
@@ -447,17 +446,20 @@ class DeepResearchApp(App):
     async def _on_report_ready(self, event: ReportReady) -> None:
         self._busy = False
         self._set_busy(False)
-        # The report must be mounted while its tab is visible: content
-        # mounted into a hidden TabPane is never painted once the tab is
-        # shown. Switch first, then render the report into a fresh widget.
-        self.action_show_tab("tab-report")
-        await self._set_report(event.report)
+        self.action_show_tab("tab-reports")
+        # Show the new report content immediately from the event — don't rely
+        # on storage having persisted it yet (RefreshReportsMessage arrives later).
+        panel = self.query_one("#report-panel", ReportDetailPanel)
+        prompt = self.query_one("#prompt", Input).value.strip()
+        panel.show(
+            Report(id=0, topic=prompt or "Report", content=event.report, created_at="")
+        )
         kind = "fallback report" if event.fallback else "report ready"
         self.query_one("#feed", ProgressFeed).add_line(
-            f"[b spring_green3]✅ {kind}[/] — see the Report tab."
+            f"[b spring_green3]✅ {kind}[/] — see the Reports tab."
         )
         self.notify(
-            "Research complete — review the Report tab.",
+            "Research complete — review the Reports tab.",
             title="Done",
             severity="information",
         )
