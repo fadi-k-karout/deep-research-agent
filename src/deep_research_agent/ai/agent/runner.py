@@ -5,6 +5,7 @@ from pydantic import BaseModel, Field, model_validator
 
 from deep_research_agent.ai.llm.base import BaseLLMProvider, LLMRequest
 from deep_research_agent.ai.state import Finding, ResearchState
+from deep_research_agent.db.storage import ResearchAgentStorage
 from deep_research_agent.events import (
     AgentEvent,
     EventEmitter,
@@ -106,12 +107,14 @@ class AgentRunner:
         max_iterations: int = 5,
         stall_threshold: int = 2,
         events: EventEmitter | None = None,
+        storage: ResearchAgentStorage | None = None,
     ):
         self.search_service = search_service
         self.llm = llm
         self.max_iterations = max_iterations
         self.stall_threshold = stall_threshold
         self.events = events
+        self.storage = storage
 
     async def _emit(self, event: AgentEvent) -> None:
         if self.events is not None:
@@ -256,7 +259,15 @@ class AgentRunner:
         await self._emit(
             ReportReady(report=state.synthesized_report, fallback=used_fallback)
         )
-        logger.info("Research complete.")
+        logger.info("Research complete")
+        if self.storage is not None:
+            try:
+                self.storage.save_report(prompt, state.synthesized_report)
+            except Exception:
+                logger.exception("Could not persist the report.")
+                await self._emit(
+                    EventError(phase="storage", message="Could not save the report.")
+                )
         return state
 
     def _record_search_outcomes(

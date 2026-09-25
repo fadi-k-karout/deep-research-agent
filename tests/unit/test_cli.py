@@ -36,11 +36,14 @@ class TestBuildParser(unittest.TestCase):
         self.assertEqual(args.max_iterations, 0)
         with (
             patch("deep_research_agent.cli.load_environment"),
+            patch("deep_research_agent.cli.ResearchAgentStorage") as storage_cls,
             self.assertRaises(SystemExit),
         ):
             from deep_research_agent.cli import main
 
             main(["--max-iterations", "0"])
+
+        storage_cls.assert_not_called()
 
 
 class TestBuildRunner(unittest.TestCase):
@@ -64,6 +67,19 @@ class TestBuildRunner(unittest.TestCase):
         search_service.assert_called_once()
         llm.assert_called_once_with(model_name="nex-agi/nex-n2.5-mini:free")
         self.assertIs(runner.events, None)
+        self.assertIsNone(runner.storage)
+
+    @patch("deep_research_agent.cli.OpenRouterLLMProvider")
+    @patch("deep_research_agent.cli.SearchService")
+    def test_uses_injected_storage(self, search_service: MagicMock, llm: MagicMock):
+        storage = MagicMock()
+        with patch(
+            "deep_research_agent.cli.SEARCH_PROVIDERS",
+            {"tavily": MagicMock(), "exa": MagicMock()},
+        ):
+            runner = build_runner(max_iterations=2, storage=storage)
+
+        self.assertIs(runner.storage, storage)
 
     @patch("deep_research_agent.cli.OpenRouterLLMProvider")
     @patch("deep_research_agent.cli.SearchService")
@@ -99,20 +115,27 @@ class TestMain(unittest.TestCase):
         with (
             self._patch_console() as print_mock,
             patch("deep_research_agent.cli.load_environment"),
+            patch("deep_research_agent.cli.ResearchAgentStorage") as storage_cls,
         ):
             from deep_research_agent.cli import main
 
             main([])
+
         run.assert_awaited_once()
-        args, _ = run.await_args
+        args, kwargs = run.await_args
         self.assertEqual(args[0], "prompt from input")
         self.assertEqual(args[1], 5)
+        self.assertIs(kwargs["storage"], storage_cls.return_value)
+        storage_cls.return_value.close.assert_called_once()
         print_mock.assert_called_once_with("# Report")
 
     @patch("deep_research_agent.tui.app.run_tui")
     @patch("deep_research_agent.cli._run", new_callable=AsyncMock)
     def test_tui_flag_dispatches_to_tui(self, run, run_tui):
-        with patch("deep_research_agent.cli.load_environment"):
+        with (
+            patch("deep_research_agent.cli.load_environment"),
+            patch("deep_research_agent.cli.ResearchAgentStorage") as storage_cls,
+        ):
             from deep_research_agent.cli import main
 
             main(["Research x", "--tui", "--max-iterations", "2", "--model", "m"])
@@ -122,7 +145,9 @@ class TestMain(unittest.TestCase):
             max_iterations=2,
             model="m",
             search_provider="tavily",
+            storage=storage_cls.return_value,
         )
+        storage_cls.return_value.close.assert_called_once()
 
 
 if __name__ == "__main__":

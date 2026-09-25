@@ -118,6 +118,14 @@ TabbedContent {
     padding: 0 2;
 }
 
+/* ── Reports tab ─────────────────────────────────────────────────────────── */
+
+#reports {
+    height: 1fr;
+    border: round $primary;
+    padding: 0 2;
+}
+
 /* ── Status bar ─────────────────────────────────────────────────────────── */
 
 #status {

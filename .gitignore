@@ -9,5 +9,8 @@ wheels/
 # Virtual environments
 .venv
 
+# Local SQLite database
+*.db
+
 .env*
 !.env*.example

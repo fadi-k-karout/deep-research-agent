@@ -39,6 +39,10 @@ class RunFailedMessage(Message):
         self.message = message
 
 
+class RefreshReportsMessage(Message):
+    """Reload the persisted reports into the Reports tab."""
+
+
 _KNOWN_EVENTS: tuple[type[AgentEvent], ...] = (
     RunStarted,
     PlanCreated,
@@ -63,6 +67,7 @@ def to_runner_message(event: AgentEvent) -> RunnerMessage | None:
 
 
 __all__ = [
+    "RefreshReportsMessage",
     "RunFailedMessage",
     "RunnerMessage",
     "to_runner_message",
