@@ -15,7 +15,15 @@ class ResearchAgentStorage:
     def __init__(self, db_path: str = "deep_research_agent.db"):
         self.db_path = db_path
         self._conn: sqlite3.Connection | None = None
-        self._init_db()
+        try:
+            self._init_db()
+        except Exception:
+            if self._conn is not None:
+                try:
+                    self._conn.close()
+                finally:
+                    self._conn = None
+            raise
 
     def _get_connection(self) -> sqlite3.Connection:
         """Internal helper to reuse the connection across queries."""
@@ -54,13 +62,18 @@ class ResearchAgentStorage:
         VALUES (?, ?, ?);
         """
         timestamp = datetime.now(UTC).isoformat()
-        conn = self._get_connection()
-
-        with conn:
-            cursor = conn.execute(query, (topic, markdown_content, timestamp))
-            if cursor.lastrowid is None:
-                raise ValueError("Failed to save report")
-            return cursor.lastrowid
+        conn = sqlite3.connect(self.db_path)
+        # Use a call-local connection (instead of the cached one) so this
+        # can safely run in a worker thread off the event loop.
+        conn.row_factory = sqlite3.Row
+        try:
+            with conn:
+                cursor = conn.execute(query, (topic, markdown_content, timestamp))
+                if cursor.lastrowid is None:
+                    raise ValueError("Failed to save report")
+                return cursor.lastrowid
+        finally:
+            conn.close()
 
     def get_all_reports(self) -> list[Report]:
         """Fetches all reports.

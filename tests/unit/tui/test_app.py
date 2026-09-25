@@ -3,7 +3,7 @@ import contextlib
 import unittest
 from unittest.mock import MagicMock, patch
 
-from textual.widgets import Collapsible, Input, Markdown, TabbedContent
+from textual.widgets import Collapsible, Input, ListItem, Markdown, TabbedContent
 
 from deep_research_agent.ai.state import Finding
 from deep_research_agent.db.storage import Report
@@ -372,7 +372,9 @@ class TestDeepResearchApp(unittest.IsolatedAsyncioTestCase):
         async with _launch(app, _FakeRunner()):
             reports = app.query_one("#reports", ReportList)
             self.assertEqual(len(reports.children), 1)
-            self.assertIs(reports.reports_map[reports.children[0]], report)
+            child = reports.children[0]
+            assert isinstance(child, ListItem)
+            self.assertIs(reports.reports_map[child], report)
             storage.get_all_reports.assert_called_once()
 
     async def test_research_passes_storage_to_runner(self):
@@ -417,9 +419,9 @@ class TestDeepResearchApp(unittest.IsolatedAsyncioTestCase):
             )
             self.assertTrue(finished)
             report_list = app.query_one("#reports", ReportList)
-            self.assertEqual(
-                report_list.reports_map[report_list.children[0]].topic, "Research x"
-            )
+            child = report_list.children[0]
+            assert isinstance(child, ListItem)
+            self.assertEqual(report_list.reports_map[child].topic, "Research x")
 
     async def test_selecting_stored_report_renders_content(self):
         report = Report(

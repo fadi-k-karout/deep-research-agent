@@ -262,7 +262,9 @@ class AgentRunner:
         logger.info("Research complete")
         if self.storage is not None:
             try:
-                self.storage.save_report(prompt, state.synthesized_report)
+                await asyncio.to_thread(
+                    self.storage.save_report, prompt, state.synthesized_report
+                )
             except Exception:
                 logger.exception("Could not persist the report.")
                 await self._emit(
