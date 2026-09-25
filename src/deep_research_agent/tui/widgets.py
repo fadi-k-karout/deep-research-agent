@@ -383,20 +383,21 @@ class ReportList(ListView):
         super().__init__(*args, **kwargs)
         self.reports_map: dict[ListItem, Report] = {}
 
-    def set_reports(self, reports: Sequence[Report]) -> None:
+    async def set_reports(self, reports: Sequence[Report]) -> None:
         """Replace the displayed reports with *reports*."""
-        self.clear()
+        self.reports_map.clear()
+        await super().clear()
         for report in reports:
             item = ListItem(
                 Label(escape(report.topic[:80])),
                 classes="report-item",
             )
             self.reports_map[item] = report
-            self.append(item)
+            await self.append(item)
 
     def clear(self) -> None:  # type: ignore[override]
         self.reports_map.clear()
-        super().clear()
+        return super().clear()  # type: ignore[return-value]
 
 
 # ── ReportDetailPanel ─────────────────────────────────────────────────────────

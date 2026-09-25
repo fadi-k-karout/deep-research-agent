@@ -144,8 +144,8 @@ class DeepResearchApp(App):
         yield StatusBar(id="status")
         yield Footer()
 
-    def on_mount(self) -> None:
-        self._refresh_reports()
+    async def on_mount(self) -> None:
+        await self._refresh_reports()
         if self._initial_prompt:
             self.action_start_run()
         else:
@@ -160,8 +160,10 @@ class DeepResearchApp(App):
             logger.exception("Could not load persisted reports")
             return []
 
-    def _refresh_reports(self) -> None:
-        self.query_one("#report-sidebar", ReportList).set_reports(self._load_reports())
+    async def _refresh_reports(self) -> None:
+        await self.query_one("#report-sidebar", ReportList).set_reports(
+            self._load_reports()
+        )
 
     @on(ListView.Selected, "#findings")
     def _on_finding_selected(self, event: ListView.Selected) -> None:
@@ -170,7 +172,12 @@ class DeepResearchApp(App):
             self.query_one("#finding-detail", FindingDetailPane).update(finding)
 
     @on(ListView.Selected, "#report-sidebar")
-    def _on_report_selected(self, event: ListView.Selected) -> None:
+    @on(ListView.Highlighted, "#report-sidebar")
+    def _on_report_selected(
+        self, event: ListView.Selected | ListView.Highlighted
+    ) -> None:
+        if event.item is None:
+            return
         report = self.query_one("#report-sidebar", ReportList).reports_map.get(
             event.item
         )
@@ -342,8 +349,8 @@ class DeepResearchApp(App):
             await result
 
     @on(RefreshReportsMessage)
-    def _handle_refresh_reports(self, _message: RefreshReportsMessage) -> None:
-        self._refresh_reports()
+    async def _handle_refresh_reports(self, _message: RefreshReportsMessage) -> None:
+        await self._refresh_reports()
         sidebar = self.query_one("#report-sidebar", ReportList)
         if sidebar.children:
             sidebar.index = 0

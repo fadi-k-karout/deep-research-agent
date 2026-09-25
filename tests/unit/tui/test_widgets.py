@@ -243,7 +243,7 @@ class TestReportList(unittest.IsolatedAsyncioTestCase):
         """set_reports() renders one row per report."""
         async with self._make_app()().run_test() as pilot:
             lst = pilot.app.query_one("#list", ReportList)
-            lst.set_reports([_dummy_report(topic="Alpha"), _dummy_report(id=2)])
+            await lst.set_reports([_dummy_report(topic="Alpha"), _dummy_report(id=2)])
             await pilot.pause()
 
             self.assertEqual(len(lst.children), 2)
@@ -253,11 +253,11 @@ class TestReportList(unittest.IsolatedAsyncioTestCase):
         """set_reports() replaces the list instead of appending to it."""
         async with self._make_app()().run_test() as pilot:
             lst = pilot.app.query_one("#list", ReportList)
-            lst.set_reports([_dummy_report()])
+            await lst.set_reports([_dummy_report()])
             await pilot.pause()
             self.assertEqual(len(lst.children), 1)
 
-            lst.set_reports([_dummy_report(id=2, topic="Beta")])
+            await lst.set_reports([_dummy_report(id=2, topic="Beta")])
             await pilot.pause()
 
             self.assertEqual(len(lst.children), 1)
@@ -269,7 +269,7 @@ class TestReportList(unittest.IsolatedAsyncioTestCase):
         """clear() empties both the rendered rows and reports_map."""
         async with self._make_app()().run_test() as pilot:
             lst = pilot.app.query_one("#list", ReportList)
-            lst.set_reports([_dummy_report(), _dummy_report(id=2)])
+            await lst.set_reports([_dummy_report(), _dummy_report(id=2)])
             await pilot.pause()
             self.assertEqual(len(lst.children), 2)
 
@@ -284,7 +284,7 @@ class TestReportList(unittest.IsolatedAsyncioTestCase):
 
         async with self._make_app()().run_test() as pilot:
             lst = pilot.app.query_one("#list", ReportList)
-            lst.set_reports([_dummy_report(topic="[bold]" + "x" * 200)])
+            await lst.set_reports([_dummy_report(topic="[bold]" + "x" * 200)])
             await pilot.pause()
 
             label = next(iter(lst.children[0].query(Label)))
@@ -298,7 +298,7 @@ class TestReportList(unittest.IsolatedAsyncioTestCase):
         async with self._make_app()().run_test() as pilot:
             lst = pilot.app.query_one("#list", ReportList)
             report = _dummy_report(topic="Mapped")
-            lst.set_reports([report])
+            await lst.set_reports([report])
             await pilot.pause()
 
             stored = next(iter(lst.reports_map.values()))
