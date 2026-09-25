@@ -1,6 +1,7 @@
 import asyncio
+import sqlite3
 import unittest
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 
 from deep_research_agent.ai.agent.runner import (
     AgentRunner,
@@ -13,6 +14,7 @@ from deep_research_agent.ai.llm.base import (
     LLMRequest,
     LLMResponse,
 )
+from deep_research_agent.events import AgentEvent, EventEmitter, EventError
 from deep_research_agent.services.search.base import (
     SearchErrorType,
     SearchResponse,
@@ -65,6 +67,51 @@ class TestAgentRunner(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(finding.query_used, "what is x")
         self.assertEqual(state.synthesized_report, "# Research Report")
         self.search.execute_batch_search.assert_awaited_once_with(["what is x"])
+
+    async def test_saves_report_when_storage_is_provided(self):
+        storage = MagicMock()
+        runner = AgentRunner(
+            search_service=self.search,
+            llm=self.llm,
+            storage=storage,
+        )
+        self.llm.generate.side_effect = [
+            _llm_response(PlannedQueries(queries=[], is_complete=True)),
+            _llm_response("# Research Report"),
+        ]
+
+        state = await runner.run("Research x")
+
+        storage.save_report.assert_called_once_with(
+            "Research x", state.synthesized_report
+        )
+
+    async def test_storage_failure_emits_error_without_raising(self):
+        storage = MagicMock()
+        storage.save_report.side_effect = sqlite3.OperationalError("disk full")
+        collected: list[AgentEvent] = []
+        events = EventEmitter()
+        events.subscribe(collected.append)
+        runner = AgentRunner(
+            search_service=self.search,
+            llm=self.llm,
+            events=events,
+            storage=storage,
+        )
+        self.llm.generate.side_effect = [
+            _llm_response(PlannedQueries(queries=[], is_complete=True)),
+            _llm_response("# Research Report"),
+        ]
+
+        state = await runner.run("Research x")
+
+        storage.save_report.assert_called_once_with(
+            "Research x", state.synthesized_report
+        )
+        self.assertEqual(state.termination_reason, "complete")
+        errors = [event for event in collected if isinstance(event, EventError)]
+        self.assertEqual(len(errors), 1)
+        self.assertEqual(errors[0].phase, "storage")
 
     async def test_failed_search_response_is_skipped(self):
         self.llm.generate.side_effect = [

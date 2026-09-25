@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import sqlite3
 from collections.abc import Awaitable
 from typing import ClassVar
 
@@ -25,6 +26,7 @@ from textual.widgets import (
 from textual.worker import Worker, WorkerState
 
 from deep_research_agent.cli import DEFAULT_MODEL, build_runner
+from deep_research_agent.db.storage import Report, ResearchAgentStorage
 from deep_research_agent.events import (
     AgentEvent,
     EventEmitter,
@@ -41,6 +43,7 @@ from deep_research_agent.events import (
     SynthesisStarted,
 )
 from deep_research_agent.tui.messages import (
+    RefreshReportsMessage,
     RunFailedMessage,
     RunnerMessage,
     to_runner_message,
@@ -50,6 +53,7 @@ from deep_research_agent.tui.widgets import (
     FindingDetailPane,
     FindingsList,
     ProgressFeed,
+    ReportList,
     StatusBar,
     StatusSnapshot,
 )
@@ -82,6 +86,7 @@ class DeepResearchApp(App):
         Binding("ctrl+s", "start_run", "Start"),
         Binding("ctrl+1", "show_tab('tab-progress')", "Progress", show=True),
         Binding("ctrl+2", "show_tab('tab-report')", "Report", show=True),
+        Binding("ctrl+3", "show_tab('tab-reports')", "Reports", show=True),
         Binding("ctrl+f", "focus_feed", "Feed", show=True),
         Binding("ctrl+x", "toggle_settings", "Settings", show=True, priority=True),
         Binding("escape", "close_detail", "Close detail", show=False),
@@ -93,6 +98,7 @@ class DeepResearchApp(App):
         max_iterations: int = 5,
         model: str = DEFAULT_MODEL,
         search_provider: str = "tavily",
+        storage: ResearchAgentStorage | None = None,
     ) -> None:
         super().__init__()
         self._initial_prompt = prompt or ""
@@ -103,6 +109,7 @@ class DeepResearchApp(App):
         self._iteration = 0
         self._findings = 0
         self._reason = ""
+        self._storage = storage
 
     # ── layout ──────────────────────────────────────────────────────
 
@@ -129,20 +136,44 @@ class DeepResearchApp(App):
                         yield FindingDetailPane(id="finding-detail")
                 with TabPane("📄 Report", id="tab-report"):
                     yield Markdown("_No report yet._", id="report")
+                with TabPane("📑 Reports", id="tab-reports"):
+                    yield ReportList(id="reports")
+
         yield StatusBar(id="status")
         yield Footer()
 
     def on_mount(self) -> None:
+        self._refresh_reports()
         if self._initial_prompt:
             self.action_start_run()
         else:
             self.query_one("#prompt", Input).focus()
+
+    def _load_reports(self) -> list[Report]:
+        if self._storage is None:
+            return []
+        try:
+            return self._storage.get_all_reports()
+        except sqlite3.Error:
+            logger.exception("Could not load persisted reports")
+            return []
+
+    def _refresh_reports(self) -> None:
+        self.query_one("#reports", ReportList).set_reports(self._load_reports())
 
     @on(ListView.Selected, "#findings")
     def _on_finding_selected(self, event: ListView.Selected) -> None:
         finding = self.query_one("#findings", FindingsList).findings_map.get(event.item)
         if finding is not None:
             self.query_one("#finding-detail", FindingDetailPane).update(finding)
+
+    @on(ListView.Selected, "#reports")
+    async def _on_report_selected(self, event: ListView.Selected) -> None:
+        report = self.query_one("#reports", ReportList).reports_map.get(event.item)
+        if report is None:
+            return
+        self.action_show_tab("tab-report")
+        await self._set_report(report.content)
 
     # ── actions ─────────────────────────────────────────────────────
 
@@ -239,12 +270,14 @@ class DeepResearchApp(App):
                 model=model,
                 search_provider=provider,
                 events=emitter,
+                storage=self._storage,
             )
         except Exception as exc:
             logger.exception("Failed to build research runner")
             self.post_message(RunFailedMessage(f"Could not start research: {exc}"))
             return
         await runner.run(prompt)
+        self.post_message(RefreshReportsMessage())
 
     def _set_busy(self, busy: bool) -> None:
         for widget_id in ("prompt", "max-iters", "model", "provider"):
@@ -312,6 +345,10 @@ class DeepResearchApp(App):
         if isinstance(result, Awaitable):
             await result
 
+    @on(RefreshReportsMessage)
+    def _handle_refresh_reports(self, _message: RefreshReportsMessage) -> None:
+        self._refresh_reports()
+
     def _on_run_started(self, event: RunStarted) -> None:
         self.query_one("#feed", ProgressFeed).add_line(
             f"{_DIM_OPEN}🚀 research started · up to {event.max_iterations} "
@@ -326,7 +363,9 @@ class DeepResearchApp(App):
                 "planner: objective may be complete — checking…"
             )
         elif event.queries:
-            queries = ", ".join(f"\u201c{markup.escape(q)}\u201d" for q in event.queries)
+            queries = ", ".join(
+                f"\u201c{markup.escape(q)}\u201d" for q in event.queries
+            )
             feed.add_line(
                 f"[b cyan]📋 \\ [iter {event.iteration}]{_DIM_CLOSE} "
                 f"planning next queries → {queries}"
@@ -444,9 +483,7 @@ class DeepResearchApp(App):
         self._busy = False
         self._set_busy(False)
         msg = markup.escape(message.message)
-        self.query_one("#feed", ProgressFeed).add_line(
-            f"[bold red]✗[/] {msg}"
-        )
+        self.query_one("#feed", ProgressFeed).add_line(f"[bold red]✗[/] {msg}")
         self.notify(msg, severity="error")
 
 
@@ -455,11 +492,20 @@ def run_tui(
     max_iterations: int = 5,
     model: str = DEFAULT_MODEL,
     search_provider: str = "tavily",
+    storage: ResearchAgentStorage | None = None,
 ) -> None:
     """Launch the Textual TUI (blocking)."""
-    DeepResearchApp(
-        prompt=prompt,
-        max_iterations=max_iterations,
-        model=model,
-        search_provider=search_provider,
-    ).run()
+    owns_storage = storage is None
+    if storage is None:
+        storage = ResearchAgentStorage()
+    try:
+        DeepResearchApp(
+            prompt=prompt,
+            max_iterations=max_iterations,
+            model=model,
+            search_provider=search_provider,
+            storage=storage,
+        ).run()
+    finally:
+        if owns_storage:
+            storage.close()

@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 
+from rich.markup import escape
 from textual.app import ComposeResult
 from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.widgets import (
@@ -20,6 +22,7 @@ from textual.widgets import (
 )
 
 from deep_research_agent.ai.state import Finding
+from deep_research_agent.db.storage import Report
 
 # ── Spinner frames ────────────────────────────────────────────────────────────
 
@@ -358,11 +361,39 @@ class Title(Static):
     DEFAULT_CSS = "Title { text-style: bold; height: 1; }"
 
 
+class ReportList(ListView):
+    """List of persisted reports, newest first.
+
+    Populate it after mount with :meth:`set_reports`; ``ListView.append``
+    cannot run before the widget is mounted.
+    """
+
+    def __init__(self, *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        self.reports_map: dict[ListItem, Report] = {}
+
+    def set_reports(self, reports: Sequence[Report]) -> None:
+        """Replace the displayed reports with *reports*."""
+        self.clear()
+        for report in reports:
+            item = ListItem(
+                Label(escape(report.topic[:80])),
+                classes="report-item",
+            )
+            self.reports_map[item] = report
+            self.append(item)
+
+    def clear(self) -> None:  # type: ignore[override]
+        self.reports_map.clear()
+        super().clear()
+
+
 __all__ = [
     "CollapsibleSettings",
     "FindingDetailPane",
     "FindingsList",
     "ProgressFeed",
+    "ReportList",
     "StatusBar",
     "StatusSnapshot",
     "Title",

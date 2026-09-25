@@ -4,6 +4,7 @@ import asyncio
 from deep_research_agent.ai.agent import AgentRunner
 from deep_research_agent.ai.llm.openrouter import OpenRouterLLMProvider
 from deep_research_agent.config import load_environment
+from deep_research_agent.db.storage import ResearchAgentStorage
 from deep_research_agent.events import EventEmitter
 from deep_research_agent.services.search.base import BaseSearchProvider
 from deep_research_agent.services.search.exa import ExaSearchProvider
@@ -65,6 +66,7 @@ def build_runner(
     model: str = DEFAULT_MODEL,
     search_provider: str = "tavily",
     events: EventEmitter | None = None,
+    storage: ResearchAgentStorage | None = None,
 ) -> AgentRunner:
     llm = OpenRouterLLMProvider(model_name=model)
     search_service = SearchService(provider=build_search_provider(search_provider))
@@ -73,6 +75,7 @@ def build_runner(
         llm=llm,
         max_iterations=max_iterations,
         events=events,
+        storage=storage,
     )
 
 
@@ -81,11 +84,13 @@ async def _run(
     max_iterations: int,
     model: str = DEFAULT_MODEL,
     search_provider: str = "tavily",
+    storage: ResearchAgentStorage | None = None,
 ) -> str:
     runner = build_runner(
         max_iterations=max_iterations,
         model=model,
         search_provider=search_provider,
+        storage=storage,
     )
     state = await runner.run(prompt)
     return state.synthesized_report or ""
@@ -100,27 +105,33 @@ def main(argv: list[str] | None = None) -> None:
     if args.max_iterations <= 0:
         parser.error("--max-iterations must be a positive integer")
 
-    if args.tui:
-        from deep_research_agent.tui.app import run_tui
+    storage = ResearchAgentStorage()
+    try:
+        if args.tui:
+            from deep_research_agent.tui.app import run_tui
 
-        run_tui(
-            prompt=args.prompt,
-            max_iterations=args.max_iterations,
-            model=args.model,
-            search_provider=args.search_provider,
+            run_tui(
+                prompt=args.prompt,
+                max_iterations=args.max_iterations,
+                model=args.model,
+                search_provider=args.search_provider,
+                storage=storage,
+            )
+            return
+
+        prompt = args.prompt
+        if not prompt:
+            prompt = input("Research prompt: ")
+
+        report = asyncio.run(
+            _run(
+                prompt,
+                args.max_iterations,
+                model=args.model,
+                search_provider=args.search_provider,
+                storage=storage,
+            )
         )
-        return
-
-    prompt = args.prompt
-    if not prompt:
-        prompt = input("Research prompt: ")
-
-    report = asyncio.run(
-        _run(
-            prompt,
-            args.max_iterations,
-            model=args.model,
-            search_provider=args.search_provider,
-        )
-    )
-    print(report)
+        print(report)
+    finally:
+        storage.close()

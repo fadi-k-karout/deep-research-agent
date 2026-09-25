@@ -1,11 +1,12 @@
 import asyncio
 import contextlib
 import unittest
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 from textual.widgets import Collapsible, Input, Markdown, TabbedContent
 
 from deep_research_agent.ai.state import Finding
+from deep_research_agent.db.storage import Report
 from deep_research_agent.events import (
     EventEmitter,
     FindingExtracted,
@@ -22,6 +23,7 @@ from deep_research_agent.tui.widgets import (
     CollapsibleSettings,
     FindingDetailPane,
     FindingsList,
+    ReportList,
 )
 
 
@@ -354,6 +356,100 @@ class TestDeepResearchApp(unittest.IsolatedAsyncioTestCase):
             await pilot.pause()
             self.assertGreater(report.scroll_y, y0)
 
+    # ── persisted reports ───────────────────────────────────────────────────
+
+    async def test_reports_tab_loads_existing_reports_on_mount(self):
+        report = Report(
+            id=1,
+            topic="Research x",
+            content="# Stored report",
+            created_at="2024-01-01T00:00:00+00:00",
+        )
+        storage = MagicMock()
+        storage.get_all_reports.return_value = [report]
+        app = DeepResearchApp(prompt=None, storage=storage)
+
+        async with _launch(app, _FakeRunner()):
+            reports = app.query_one("#reports", ReportList)
+            self.assertEqual(len(reports.children), 1)
+            self.assertIs(reports.reports_map[reports.children[0]], report)
+            storage.get_all_reports.assert_called_once()
+
+    async def test_research_passes_storage_to_runner(self):
+        storage = MagicMock()
+        storage.get_all_reports.return_value = []
+        runner = _FakeRunner()
+        app = DeepResearchApp(prompt="Research x", max_iterations=3, storage=storage)
+
+        with patch("deep_research_agent.tui.app.build_runner") as mock_build:
+
+            def make_runner(*, events: EventEmitter | None = None, **kwargs):
+                return runner.with_events(events) if events is not None else runner
+
+            mock_build.side_effect = make_runner
+            async with app.run_test(size=(110, 48)) as pilot:
+                finished = await _wait_until(pilot, lambda: not app._busy)
+                self.assertTrue(finished)
+                self.assertIs(mock_build.call_args.kwargs["storage"], storage)
+
+    async def test_report_list_refreshes_after_run(self):
+        reports: list[Report] = []
+        storage = MagicMock()
+        storage.get_all_reports.side_effect = lambda: list(reports)
+
+        class _SavingRunner(_FakeRunner):
+            async def run(self, prompt: str):
+                await super().run(prompt)
+                reports.append(
+                    Report(
+                        id=1,
+                        topic="Research x",
+                        content="# Saved report",
+                        created_at="2024-01-01T00:00:00+00:00",
+                    )
+                )
+
+        app = DeepResearchApp(prompt="Research x", max_iterations=3, storage=storage)
+        async with _launch(app, _SavingRunner()) as (_, pilot):
+            finished = await _wait_until(
+                pilot,
+                lambda: len(app.query_one("#reports", ReportList).children) == 1,
+            )
+            self.assertTrue(finished)
+            report_list = app.query_one("#reports", ReportList)
+            self.assertEqual(
+                report_list.reports_map[report_list.children[0]].topic, "Research x"
+            )
+
+    async def test_selecting_stored_report_renders_content(self):
+        report = Report(
+            id=1,
+            topic="Research x",
+            content="# Stored report\n\nStored body.",
+            created_at="2024-01-01T00:00:00+00:00",
+        )
+        storage = MagicMock()
+        storage.get_all_reports.return_value = [report]
+        app = DeepResearchApp(prompt=None, storage=storage)
+
+        async with _launch(app, _FakeRunner()) as (_, pilot):
+            app.action_show_tab("tab-reports")
+            await pilot.pause()
+
+            reports = app.query_one("#reports", ReportList)
+            reports.focus()
+            await pilot.pause()
+            reports.index = 0
+            await pilot.pause()
+            await pilot.press("enter")
+
+            opened = await _wait_until(
+                pilot,
+                lambda: app.query_one(TabbedContent).active == "tab-report",
+            )
+            self.assertTrue(opened)
+            self.assertIn("Stored body.", app.query_one("#report", Markdown).source)
+
     # ── widget ID smoke test ─────────────────────────────────────────────────
 
     async def test_all_key_widget_ids_are_present(self):
@@ -366,11 +462,54 @@ class TestDeepResearchApp(unittest.IsolatedAsyncioTestCase):
                 "#finding-detail",
                 "#settings",
                 "#status",
+                "#reports",
             ):
                 self.assertIsNotNone(
                     app.query_one(widget_id),
                     msg=f"Widget {widget_id!r} not found in the DOM",
                 )
+
+
+class TestRunTui(unittest.TestCase):
+    def test_creates_and_closes_its_own_storage(self):
+        from deep_research_agent.tui.app import run_tui
+
+        storage = MagicMock()
+        with (
+            patch("deep_research_agent.tui.app.ResearchAgentStorage") as storage_cls,
+            patch("deep_research_agent.tui.app.DeepResearchApp") as app_cls,
+        ):
+            storage_cls.return_value = storage
+            run_tui(prompt="Research x")
+
+        storage_cls.assert_called_once_with()
+        self.assertIs(app_cls.call_args.kwargs["storage"], storage)
+        storage.close.assert_called_once()
+
+    def test_does_not_close_injected_storage(self):
+        from deep_research_agent.tui.app import run_tui
+
+        storage = MagicMock()
+        with patch("deep_research_agent.tui.app.DeepResearchApp") as app_cls:
+            run_tui(prompt="Research x", storage=storage)
+
+        self.assertIs(app_cls.call_args.kwargs["storage"], storage)
+        storage.close.assert_not_called()
+
+    def test_closes_own_storage_when_app_raises(self):
+        from deep_research_agent.tui.app import run_tui
+
+        storage = MagicMock()
+        with (
+            patch("deep_research_agent.tui.app.ResearchAgentStorage") as storage_cls,
+            patch("deep_research_agent.tui.app.DeepResearchApp") as app_cls,
+        ):
+            storage_cls.return_value = storage
+            app_cls.return_value.run.side_effect = RuntimeError("boom")
+            with self.assertRaises(RuntimeError):
+                run_tui(prompt="Research x")
+
+        storage.close.assert_called_once()
 
 
 if __name__ == "__main__":
