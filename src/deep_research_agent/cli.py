@@ -1,5 +1,7 @@
 import argparse
 import asyncio
+import logging
+import sqlite3
 
 from deep_research_agent.ai.agent import AgentRunner
 from deep_research_agent.ai.llm.openrouter import OpenRouterLLMProvider
@@ -13,6 +15,8 @@ from deep_research_agent.services.search.tavily import TavilySearchProvider
 
 DEFAULT_MODEL = "nex-agi/nex-n2.5-mini:free"
 SEARCH_PROVIDERS = {"tavily": TavilySearchProvider, "exa": ExaSearchProvider}
+
+logger = logging.getLogger(__name__)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -105,7 +109,12 @@ def main(argv: list[str] | None = None) -> None:
     if args.max_iterations <= 0:
         parser.error("--max-iterations must be a positive integer")
 
-    storage = ResearchAgentStorage()
+    storage: ResearchAgentStorage | None
+    try:
+        storage = ResearchAgentStorage()
+    except (OSError, sqlite3.Error) as exc:
+        logger.warning("Could not initialize storage; continuing without it: %s", exc)
+        storage = None
     try:
         if args.tui:
             from deep_research_agent.tui.app import run_tui
@@ -134,4 +143,5 @@ def main(argv: list[str] | None = None) -> None:
         )
         print(report)
     finally:
-        storage.close()
+        if storage is not None:
+            storage.close()

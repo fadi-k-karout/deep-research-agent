@@ -495,9 +495,15 @@ def run_tui(
     storage: ResearchAgentStorage | None = None,
 ) -> None:
     """Launch the Textual TUI (blocking)."""
-    owns_storage = storage is None
+    owns_storage = False
     if storage is None:
-        storage = ResearchAgentStorage()
+        try:
+            storage = ResearchAgentStorage()
+            owns_storage = True
+        except Exception:
+            logger.exception("Could not initialize storage; continuing without it.")
+            storage = None
+            owns_storage = False
     try:
         DeepResearchApp(
             prompt=prompt,
@@ -507,5 +513,5 @@ def run_tui(
             storage=storage,
         ).run()
     finally:
-        if owns_storage:
+        if owns_storage and storage is not None:
             storage.close()
