@@ -368,6 +368,17 @@ class ReportList(ListView):
     cannot run before the widget is mounted.
     """
 
+    DEFAULT_CSS = """
+    ReportList > ListItem {
+        padding: 0 1;
+        height: 1;
+    }
+    ReportList > ListItem.--highlight {
+        border-left: thick $accent;
+        background: $boost;
+    }
+    """
+
     def __init__(self, *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
         self.reports_map: dict[ListItem, Report] = {}
@@ -388,11 +399,82 @@ class ReportList(ListView):
         super().clear()
 
 
+# ── ReportDetailPanel ─────────────────────────────────────────────────────────
+
+_PLACEHOLDER = "_Select a report to read it._"
+
+
+class ReportDetailPanel(Vertical):
+    """Right-hand panel of the master-detail Reports layout.
+
+    Composes a top bar (toggle button + title) above a scrollable Markdown
+    pane.  Call :meth:`show` to populate it with a report; :meth:`clear` to
+    reset it to the placeholder state.
+    """
+
+    DEFAULT_CSS = """
+    ReportDetailPanel {
+        width: 1fr;
+        height: 1fr;
+    }
+    ReportDetailPanel #report-topbar {
+        height: 3;
+        border-bottom: solid $border;
+        align-vertical: middle;
+    }
+    ReportDetailPanel #toggle-sidebar {
+        width: 5;
+        min-width: 5;
+        background: transparent;
+        border: none;
+        color: $text-muted;
+    }
+    ReportDetailPanel #toggle-sidebar:hover {
+        background: $boost;
+        color: $text;
+        border: none;
+    }
+    ReportDetailPanel #report-title {
+        width: 1fr;
+        content-align: left middle;
+        height: 3;
+        padding: 0 1;
+        color: $text-muted;
+    }
+    ReportDetailPanel #report-content {
+        height: 1fr;
+        overflow-y: auto;
+        scrollbar-size-vertical: 1;
+        padding: 0 2;
+    }
+    """
+
+    def compose(self) -> ComposeResult:
+        with Horizontal(id="report-topbar"):
+            yield Button("≡", id="toggle-sidebar")
+            yield Static("", id="report-title")
+        with VerticalScroll(id="report-content-scroll"):
+            yield Markdown(_PLACEHOLDER, id="report-content")
+
+    def show(self, report: Report) -> None:
+        """Populate the panel with *report*."""
+        self.query_one("#report-title", Static).update(escape(report.topic))
+        md = self.query_one("#report-content", Markdown)
+        md.update(report.content)
+        md.scroll_home(animate=False)
+
+    def clear(self) -> None:
+        """Reset the panel to its placeholder state."""
+        self.query_one("#report-title", Static).update("")
+        self.query_one("#report-content", Markdown).update(_PLACEHOLDER)
+
+
 __all__ = [
     "CollapsibleSettings",
     "FindingDetailPane",
     "FindingsList",
     "ProgressFeed",
+    "ReportDetailPanel",
     "ReportList",
     "StatusBar",
     "StatusSnapshot",

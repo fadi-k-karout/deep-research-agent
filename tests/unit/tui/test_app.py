@@ -3,7 +3,14 @@ import contextlib
 import unittest
 from unittest.mock import MagicMock, patch
 
-from textual.widgets import Collapsible, Input, ListItem, Markdown, TabbedContent
+from textual.widgets import (
+    Collapsible,
+    Input,
+    ListItem,
+    Markdown,
+    Static,
+    TabbedContent,
+)
 
 from deep_research_agent.ai.state import Finding
 from deep_research_agent.db.storage import Report
@@ -23,6 +30,7 @@ from deep_research_agent.tui.widgets import (
     CollapsibleSettings,
     FindingDetailPane,
     FindingsList,
+    ReportDetailPanel,
     ReportList,
 )
 
@@ -120,13 +128,13 @@ class TestDeepResearchApp(unittest.IsolatedAsyncioTestCase):
             self.assertTrue(finished)
 
             findings = app.query_one("#findings", FindingsList)
-            report = app.query_one("#report", Markdown)
+            panel = app.query_one("#report-panel", ReportDetailPanel)
+            report_md = panel.query_one("#report-content", Markdown)
 
             self.assertEqual(len(findings.children), 1)
             self.assertEqual(app._findings, 1)
             self.assertEqual(app._reason, "complete")
-            self.assertIn("Research Report", report.source)
-            self.assertIn("Research x", report.source)
+            self.assertIn("Research Report", report_md.source)
             self.assertFalse(app.query_one("#start").disabled)
 
     async def test_failed_run_records_termination_reason(self):
@@ -285,6 +293,7 @@ class TestDeepResearchApp(unittest.IsolatedAsyncioTestCase):
     # ── keyboard / tab navigation ────────────────────────────────────────────
 
     async def test_ctrl_1_and_ctrl_2_switch_tabs(self):
+        """ctrl+1 → tab-progress, ctrl+2 → tab-reports (no tab-report any more)."""
         app = DeepResearchApp(prompt="Research x", max_iterations=3)
         async with _launch(app, _FakeRunner()) as (_, pilot):
             finished = await _wait_until(pilot, lambda: not app._busy)
@@ -296,7 +305,7 @@ class TestDeepResearchApp(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(tabs.active, "tab-progress")
             await pilot.press("ctrl+2")
             await pilot.pause()
-            self.assertEqual(tabs.active, "tab-report")
+            self.assertEqual(tabs.active, "tab-reports")
 
     async def test_ctrl_f_focuses_feed(self):
         """Ctrl+F switches to the progress tab and focuses the feed."""
@@ -306,7 +315,7 @@ class TestDeepResearchApp(unittest.IsolatedAsyncioTestCase):
             self.assertTrue(finished)
 
             # Switch away from progress tab first.
-            app.action_show_tab("tab-report")
+            app.action_show_tab("tab-reports")
             await pilot.pause()
 
             await pilot.press("ctrl+f")
@@ -315,20 +324,36 @@ class TestDeepResearchApp(unittest.IsolatedAsyncioTestCase):
             tabs = app.query_one(TabbedContent)
             self.assertEqual(tabs.active, "tab-progress")
 
-    # ── report tab ───────────────────────────────────────────────────────────
+    # ── report panel ─────────────────────────────────────────────────────────
 
-    async def test_report_ready_switches_to_report_tab(self):
+    async def test_report_ready_switches_to_reports_tab(self):
+        """After a run completes the active tab is tab-reports (not tab-report)."""
         app = DeepResearchApp(prompt="Research x", max_iterations=3)
         async with _launch(app, _FakeRunner()) as (_, pilot):
             finished = await _wait_until(pilot, lambda: not app._busy)
             self.assertTrue(finished)
 
             tabs = app.query_one(TabbedContent)
-            await _wait_until(pilot, lambda: tabs.active == "tab-report")
-            self.assertEqual(tabs.active, "tab-report")
+            await _wait_until(pilot, lambda: tabs.active == "tab-reports")
+            self.assertEqual(tabs.active, "tab-reports")
 
-    async def test_report_is_painted_after_report_ready(self):
-        """Regression: the report must actually render on screen."""
+    async def test_report_content_populated_after_report_ready(self):
+        """The ReportDetailPanel shows the report content after a completed run."""
+        app = DeepResearchApp(prompt="Research x", max_iterations=3)
+        async with _launch(app, _FakeRunner()) as (_, pilot):
+            finished = await _wait_until(pilot, lambda: not app._busy)
+            self.assertTrue(finished)
+
+            for _ in range(10):
+                await pilot.pause()
+
+            panel = app.query_one("#report-panel", ReportDetailPanel)
+            report_md = panel.query_one("#report-content", Markdown)
+            self.assertIn("Research Report", report_md.source)
+            self.assertIn("Everything is fine.", report_md.source)
+
+    async def test_report_panel_is_scrollable(self):
+        """The report content scroll container can scroll when content overflows."""
         app = DeepResearchApp(prompt="Research x", max_iterations=3)
         async with _launch(app, _FakeRunner()) as (_, pilot):
             finished = await _wait_until(pilot, lambda: not app._busy)
@@ -336,25 +361,56 @@ class TestDeepResearchApp(unittest.IsolatedAsyncioTestCase):
 
             for _ in range(30):
                 await pilot.pause()
-            layout = app.screen._compositor.render_full_update()
-            painted = "\n".join(
-                "".join(strip.text for strip in line) for line in layout.strips
-            )
-            for expected in (
-                "Research Report",
-                "Objective: Research x",
-                "Everything is fine.",
-            ):
-                self.assertIn(expected, painted)
 
-            # Regression: the report pane must be scrollable.
-            report = app.query_one("#report", Markdown)
-            self.assertEqual(report.styles.overflow_y, "auto")
-            self.assertGreater(report.max_scroll_y, 0)
-            y0 = report.scroll_y
-            report.scroll_down()
+            from textual.containers import VerticalScroll
+
+            scroll = app.query_one("#report-content-scroll", VerticalScroll)
+            self.assertGreaterEqual(scroll.max_scroll_y, 0)
+
+    # ── sidebar toggle ───────────────────────────────────────────────────────
+
+    async def test_sidebar_visible_by_default(self):
+        """The report sidebar is visible when the Reports tab is open."""
+        app = DeepResearchApp(prompt=None)
+        async with _launch(app, _FakeRunner()) as (_, pilot):
+            app.action_show_tab("tab-reports")
             await pilot.pause()
-            self.assertGreater(report.scroll_y, y0)
+            sidebar = app.query_one("#report-sidebar", ReportList)
+            self.assertTrue(sidebar.display)
+
+    async def test_toggle_sidebar_hides_and_restores_sidebar(self):
+        """action_toggle_sidebar() hides then restores the sidebar."""
+        app = DeepResearchApp(prompt=None)
+        async with _launch(app, _FakeRunner()) as (_, pilot):
+            app.action_show_tab("tab-reports")
+            await pilot.pause()
+            sidebar = app.query_one("#report-sidebar", ReportList)
+            self.assertTrue(sidebar.display)
+
+            app.action_toggle_sidebar()
+            await pilot.pause()
+            self.assertFalse(sidebar.display)
+
+            app.action_toggle_sidebar()
+            await pilot.pause()
+            self.assertTrue(sidebar.display)
+
+    async def test_ctrl_b_toggles_sidebar(self):
+        """ctrl+b fires the toggle_sidebar action."""
+        app = DeepResearchApp(prompt=None)
+        async with _launch(app, _FakeRunner()) as (_, pilot):
+            app.action_show_tab("tab-reports")
+            await pilot.pause()
+            sidebar = app.query_one("#report-sidebar", ReportList)
+            self.assertTrue(sidebar.display)
+
+            await pilot.press("ctrl+b")
+            hidden = await _wait_until(pilot, lambda: not sidebar.display)
+            self.assertTrue(hidden)
+
+            await pilot.press("ctrl+b")
+            shown = await _wait_until(pilot, lambda: sidebar.display)
+            self.assertTrue(shown)
 
     # ── persisted reports ───────────────────────────────────────────────────
 
@@ -370,7 +426,7 @@ class TestDeepResearchApp(unittest.IsolatedAsyncioTestCase):
         app = DeepResearchApp(prompt=None, storage=storage)
 
         async with _launch(app, _FakeRunner()):
-            reports = app.query_one("#reports", ReportList)
+            reports = app.query_one("#report-sidebar", ReportList)
             self.assertEqual(len(reports.children), 1)
             child = reports.children[0]
             assert isinstance(child, ListItem)
@@ -415,15 +471,16 @@ class TestDeepResearchApp(unittest.IsolatedAsyncioTestCase):
         async with _launch(app, _SavingRunner()) as (_, pilot):
             finished = await _wait_until(
                 pilot,
-                lambda: len(app.query_one("#reports", ReportList).children) == 1,
+                lambda: len(app.query_one("#report-sidebar", ReportList).children) == 1,
             )
             self.assertTrue(finished)
-            report_list = app.query_one("#reports", ReportList)
+            report_list = app.query_one("#report-sidebar", ReportList)
             child = report_list.children[0]
             assert isinstance(child, ListItem)
             self.assertEqual(report_list.reports_map[child].topic, "Research x")
 
     async def test_selecting_stored_report_renders_content(self):
+        """Selecting a report in the sidebar shows its content in ReportDetailPanel."""
         report = Report(
             id=1,
             topic="Research x",
@@ -438,19 +495,28 @@ class TestDeepResearchApp(unittest.IsolatedAsyncioTestCase):
             app.action_show_tab("tab-reports")
             await pilot.pause()
 
-            reports = app.query_one("#reports", ReportList)
-            reports.focus()
+            sidebar = app.query_one("#report-sidebar", ReportList)
+            sidebar.focus()
             await pilot.pause()
-            reports.index = 0
+            sidebar.index = 0
             await pilot.pause()
             await pilot.press("enter")
 
-            opened = await _wait_until(
+            panel = app.query_one("#report-panel", ReportDetailPanel)
+            shown = await _wait_until(
                 pilot,
-                lambda: app.query_one(TabbedContent).active == "tab-report",
+                lambda: (
+                    "Stored body."
+                    in panel.query_one("#report-content", Markdown).source
+                ),
             )
-            self.assertTrue(opened)
-            self.assertIn("Stored body.", app.query_one("#report", Markdown).source)
+            self.assertTrue(shown)
+            # Tab remains on tab-reports — no tab switching needed any more.
+            tabs = app.query_one(TabbedContent)
+            self.assertEqual(tabs.active, "tab-reports")
+            # Title is updated too.
+            title = panel.query_one("#report-title", Static)
+            self.assertIn("Research x", str(title.render()))
 
     # ── widget ID smoke test ─────────────────────────────────────────────────
 
@@ -464,7 +530,8 @@ class TestDeepResearchApp(unittest.IsolatedAsyncioTestCase):
                 "#finding-detail",
                 "#settings",
                 "#status",
-                "#reports",
+                "#report-sidebar",
+                "#report-panel",
             ):
                 self.assertIsNotNone(
                     app.query_one(widget_id),
