@@ -4,7 +4,7 @@ version = "0.1.0"
 description = "A stateful deep research agent with dual-layer semantic memory, web search, scraping, and LangGraph orchestration."
 readme = "README.md"
 authors = [
-    { name = "Fadi Karout", email = "fadi@example.com" }
+    { name = "Fadi Karout", email = "97478111+fadi-k-karout@users.noreply.github.com" }
 ]
 requires-python = ">=3.14"
 dependencies = [
