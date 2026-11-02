@@ -11,6 +11,8 @@ from deep_research_agent.ai.state import Finding
 from deep_research_agent.db.storage import Report
 from deep_research_agent.tui.widgets import (
     CollapsibleSettings,
+    ExportMenu,
+    ExportMenuOverlay,
     FindingDetailPane,
     FindingsList,
     ReportDetailPanel,
@@ -18,6 +20,11 @@ from deep_research_agent.tui.widgets import (
     StatusBar,
     StatusSnapshot,
 )
+
+_CATEGORIES = {
+    "local_file": ["md", "pdf", "html"],
+    "ai_chat": ["chatgpt", "claude"],
+}
 
 
 def _dummy_finding(**overrides) -> Finding:
@@ -422,6 +429,285 @@ class TestStatusBar(unittest.IsolatedAsyncioTestCase):
             self.assertIn("▪", _widget_text(bar))
 
 
+# ── ExportMenu ─────────────────────────────────────────────────────────────────
+
+
+class TestExportMenu(unittest.IsolatedAsyncioTestCase):
+    def _make_app(self, categories=None):
+        from textual import on
+        from textual.app import App, ComposeResult
+        from textual.containers import Vertical
+
+        chosen = _CATEGORIES if categories is None else categories
+
+        class _App(App):
+            DEFAULT_CSS = "#right { align: right middle; }"
+
+            def __init__(self) -> None:
+                super().__init__()
+                self.requests: list[tuple[str, ...]] = []
+
+            def compose(self) -> ComposeResult:
+                # The menu lives in the right-hand edge of the report header.
+                with Vertical(id="right"):
+                    yield ExportMenu(chosen, id="menu")
+
+            @on(ExportMenu.ExportRequested)
+            def _record(self, event: ExportMenu.ExportRequested) -> None:
+                self.requests.append(event.formats)
+
+        return _App()
+
+    @staticmethod
+    def _parts(app) -> ExportMenu:
+        return app.query_one("#menu", ExportMenu)
+
+    @staticmethod
+    def _overlay(app) -> ExportMenuOverlay:
+        return app.query_one(ExportMenuOverlay)
+
+    @staticmethod
+    def _trigger(app):
+        from textual.widgets import Static
+
+        return app.query_one("#menu .export-trigger", Static)
+
+    def _options(self, app) -> list[tuple[str | None, bool]]:
+        overlay = self._overlay(app)
+        return [
+            (overlay.get_option_at_index(i).id, overlay.get_option_at_index(i).disabled)
+            for i in range(overlay.option_count)
+        ]
+
+    async def test_starts_collapsed_with_a_hidden_overlay(self):
+        async with self._make_app().run_test() as pilot:
+            app = pilot.app
+            self.assertFalse(self._parts(app).expanded)
+            self.assertFalse(self._overlay(app).display)
+
+    async def test_disabled_until_a_report_is_on_screen(self):
+        async with self._make_app().run_test() as pilot:
+            app = pilot.app
+            menu = self._parts(app)
+            self.assertTrue(menu.disabled, "no formats loaded yet")
+            menu.set_formats(_CATEGORIES)
+            self.assertTrue(menu.disabled, "no report on screen yet")
+
+            menu.set_report_available(True)
+            self.assertFalse(menu.disabled)
+
+    async def test_stays_disabled_when_there_are_no_formats(self):
+        async with self._make_app({}).run_test() as pilot:
+            app = pilot.app
+            menu = self._parts(app)
+            menu.set_report_available(True)
+            self.assertTrue(menu.disabled)
+
+    async def test_options_are_grouped_by_category_with_disabled_headers(self):
+        async with self._make_app().run_test() as pilot:
+            app = pilot.app
+            options = self._options(app)
+
+            # Headers are the disabled (None) entries; the blank lines between
+            # them are OptionList separators, which are not addressable by index.
+            self.assertEqual(
+                options,
+                [
+                    (None, True),  # "Save to file" header
+                    ("md", False),
+                    ("pdf", False),
+                    ("html", False),
+                    (None, True),  # "Open in AI chat" header
+                    ("chatgpt", False),
+                    ("claude", False),
+                    ("all", False),
+                ],
+            )
+
+    async def test_bulk_entry_is_absent_for_a_single_local_file_format(self):
+        async with self._make_app({"local_file": ["md"]}).run_test() as pilot:
+            app = pilot.app
+            self.assertEqual(
+                [option_id for option_id, _ in self._options(app)],
+                [None, "md"],
+            )
+
+    async def test_enter_expands_and_moves_focus_to_the_overlay(self):
+        async with self._make_app().run_test() as pilot:
+            app = pilot.app
+            menu = self._parts(app)
+            menu.set_report_available(True)
+            menu.focus()
+            await pilot.pause()
+
+            await pilot.press("enter")
+            await pilot.pause()
+
+            self.assertTrue(menu.expanded)
+            self.assertTrue(self._overlay(app).display)
+            self.assertTrue(self._overlay(app).has_focus)
+
+    async def test_highlight_starts_on_the_first_selectable_option(self):
+        """Category headers are disabled, so the first option is selected."""
+        async with self._make_app().run_test() as pilot:
+            app = pilot.app
+            menu = self._parts(app)
+            menu.set_report_available(True)
+            menu.expanded = True
+            await pilot.pause()
+
+            self.assertEqual(self._overlay(app).highlighted, 1)
+
+    async def test_arrow_keys_skip_disabled_headers(self):
+        async with self._make_app().run_test() as pilot:
+            app = pilot.app
+            menu = self._parts(app)
+            menu.set_report_available(True)
+            menu.expanded = True
+            await pilot.pause()
+
+            overlay = self._overlay(app)
+            await pilot.press("down")
+            await pilot.pause()
+
+            self.assertEqual(overlay.highlighted, 2)
+
+    async def test_escape_closes_the_menu_and_returns_focus(self):
+        async with self._make_app().run_test() as pilot:
+            app = pilot.app
+            menu = self._parts(app)
+            menu.set_report_available(True)
+            menu.expanded = True
+            await pilot.pause()
+
+            await pilot.press("escape")
+            await pilot.pause()
+
+            self.assertFalse(menu.expanded)
+            self.assertFalse(self._overlay(app).display)
+            self.assertTrue(menu.has_focus)
+
+    async def test_clicking_the_trigger_toggles_the_menu(self):
+        async with self._make_app().run_test() as pilot:
+            app = pilot.app
+            menu = self._parts(app)
+            menu.set_report_available(True)
+            await pilot.pause()
+
+            await pilot.click("#menu .export-trigger")
+            await pilot.pause()
+            self.assertTrue(menu.expanded)
+
+            await pilot.click("#menu .export-trigger")
+            await pilot.pause()
+            self.assertFalse(menu.expanded)
+
+    async def test_trigger_label_reflects_the_open_state(self):
+        async with self._make_app().run_test() as pilot:
+            app = pilot.app
+            menu = self._parts(app)
+            menu.set_report_available(True)
+            await pilot.pause()
+
+            self.assertEqual(str(self._trigger(app).render()), "⇩ Export ▾")
+
+            menu.expanded = True
+            await pilot.pause()
+            self.assertEqual(str(self._trigger(app).render()), "⇩ Export ▴")
+
+    async def test_choosing_a_format_posts_an_export_request(self):
+        async with self._make_app().run_test() as pilot:
+            app = pilot.app
+            menu = self._parts(app)
+            menu.set_report_available(True)
+            menu.expanded = True
+            await pilot.pause()
+
+            overlay = self._overlay(app)
+            overlay.highlighted = 2  # PDF
+            await pilot.press("enter")
+            await pilot.pause()
+
+            self.assertEqual(app.requests, [("pdf",)])
+            self.assertFalse(menu.expanded, "the menu closes after a choice")
+
+    async def test_choosing_save_all_requests_every_local_file_format(self):
+        async with self._make_app().run_test() as pilot:
+            app = pilot.app
+            menu = self._parts(app)
+            menu.set_report_available(True)
+            menu.expanded = True
+            await pilot.pause()
+
+            overlay = self._overlay(app)
+            overlay.highlighted = overlay.option_count - 1
+            await pilot.press("enter")
+            await pilot.pause()
+
+            self.assertEqual(app.requests, [("md", "pdf", "html")])
+
+    async def test_clicking_an_option_exports_it(self):
+        async with self._make_app().run_test(size=(120, 30)) as pilot:
+            app = pilot.app
+            menu = self._parts(app)
+            menu.set_report_available(True)
+            menu.expanded = True
+            for _ in range(4):
+                await pilot.pause()
+
+            # Row 0 is the "Save to file" header, so "HTML" sits on content row 3.
+            await pilot.click(ExportMenuOverlay, offset=(4, 1 + 3))
+            await pilot.pause()
+
+            self.assertEqual(app.requests, [("html",)])
+
+    async def test_menu_cannot_expand_while_disabled(self):
+        async with self._make_app().run_test() as pilot:
+            app = pilot.app
+            menu = self._parts(app)
+            self.assertTrue(menu.disabled)
+
+            menu.expanded = True
+            await pilot.pause()
+
+            self.assertFalse(menu.expanded)
+
+    async def test_busy_label_and_input_lock(self):
+        async with self._make_app().run_test() as pilot:
+            app = pilot.app
+            menu = self._parts(app)
+            menu.set_report_available(True)
+            await pilot.pause()
+
+            menu.busy = True
+            await pilot.pause()
+            self.assertEqual(str(self._trigger(app).render()), "⏳ Exporting…")
+
+            menu.action_toggle_menu()
+            await pilot.pause()
+            self.assertFalse(menu.expanded, "no second export mid-flight")
+
+            menu.busy = False
+            await pilot.pause()
+            self.assertEqual(str(self._trigger(app).render()), "⇩ Export ▾")
+
+    async def test_overlay_is_right_aligned_with_the_trigger(self):
+        """The panel hangs off the button instead of running off the screen."""
+        async with self._make_app().run_test(size=(100, 24)) as pilot:
+            app = pilot.app
+            menu = self._parts(app)
+            menu.set_report_available(True)
+            menu.expanded = True
+            for _ in range(4):
+                await pilot.pause()
+
+            overlay = self._overlay(app)
+            self.assertEqual(
+                overlay.region.x + overlay.region.width,
+                menu.region.x + menu.region.width,
+            )
+
+
 # ── ReportDetailPanel ──────────────────────────────────────────────────────────
 
 
@@ -487,6 +773,88 @@ class TestReportDetailPanel(unittest.IsolatedAsyncioTestCase):
             panel = pilot.app.query_one("#panel", ReportDetailPanel)
             btn = panel.query_one("#toggle-sidebar", Button)
             self.assertIsNotNone(btn)
+
+    # ── export dropdown wiring ────────────────────────────────────────────
+
+    async def test_current_report_tracks_show_and_clear(self):
+        """current_report is the report on screen, or None when empty."""
+        async with self._make_app()().run_test() as pilot:
+            panel = pilot.app.query_one("#panel", ReportDetailPanel)
+            self.assertIsNone(panel.current_report)
+
+            report = _dummy_report()
+            panel.show(report)
+            self.assertIs(panel.current_report, report)
+
+            panel.clear()
+            self.assertIsNone(panel.current_report)
+
+    async def test_export_menu_follows_the_loaded_report(self):
+        """The dropdown is enabled only while a report is displayed."""
+        async with self._make_app()().run_test() as pilot:
+            panel = pilot.app.query_one("#panel", ReportDetailPanel)
+            panel.set_export_formats(_CATEGORIES)
+            menu = panel.query_one("#export-menu", ExportMenu)
+            await pilot.pause()
+
+            self.assertTrue(menu.disabled)
+
+            panel.show(_dummy_report())
+            await pilot.pause()
+            self.assertFalse(menu.disabled)
+
+            panel.clear()
+            await pilot.pause()
+            self.assertTrue(menu.disabled)
+
+    async def test_export_menu_offers_the_service_formats(self):
+        async with self._make_app()().run_test() as pilot:
+            panel = pilot.app.query_one("#panel", ReportDetailPanel)
+            panel.set_export_formats(_CATEGORIES)
+            panel.show(_dummy_report())
+            await pilot.pause()
+
+            overlay = panel.query_one(ExportMenuOverlay)
+            ids = [
+                overlay.get_option_at_index(i).id for i in range(overlay.option_count)
+            ]
+            self.assertEqual(
+                ids, [None, "md", "pdf", "html", None, "chatgpt", "claude", "all"]
+            )
+
+    async def test_export_status_is_hidden_until_shown(self):
+        """The inline status takes no room in the top bar while empty."""
+        from textual.widgets import Static
+
+        async with self._make_app()().run_test() as pilot:
+            panel = pilot.app.query_one("#panel", ReportDetailPanel)
+            status = panel.query_one("#export-status", Static)
+            await pilot.pause()
+            self.assertFalse(status.display)
+
+            panel.show_export_status("✓ Saved exports/report-1.md")
+            await pilot.pause()
+            self.assertTrue(status.display)
+            self.assertIn("exports/report-1.md", str(status.render()))
+
+            panel.clear_export_status()
+            await pilot.pause()
+            self.assertFalse(status.display)
+            self.assertEqual(str(status.render()).strip(), "")
+
+    async def test_clear_also_hides_the_export_status(self):
+        from textual.widgets import Static
+
+        async with self._make_app()().run_test() as pilot:
+            panel = pilot.app.query_one("#panel", ReportDetailPanel)
+            panel.show(_dummy_report())
+            panel.show_export_status("✓ Saved exports/report-1.md")
+            await pilot.pause()
+
+            panel.clear()
+            await pilot.pause()
+
+            self.assertFalse(panel.query_one("#export-status", Static).display)
 
 
 if __name__ == "__main__":
