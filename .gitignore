@@ -12,5 +12,9 @@ wheels/
 # Local SQLite database
 *.db
 
+# Environment variables
 .env*
 !.env*.example
+
+# export output
+exports/*

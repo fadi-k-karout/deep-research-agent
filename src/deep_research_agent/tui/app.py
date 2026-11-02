@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
+import re
 import sqlite3
 from collections.abc import Awaitable
+from pathlib import Path
 from typing import ClassVar
 
 from rich import markup
@@ -41,6 +44,7 @@ from deep_research_agent.events import (
     SearchStarted,
     SynthesisStarted,
 )
+from deep_research_agent.services.export.service import ExportService
 from deep_research_agent.tui.messages import (
     RefreshReportsMessage,
     RunFailedMessage,
@@ -49,6 +53,7 @@ from deep_research_agent.tui.messages import (
 )
 from deep_research_agent.tui.widgets import (
     CollapsibleSettings,
+    ExportMenu,
     FindingDetailPane,
     FindingsList,
     ProgressFeed,
@@ -63,6 +68,14 @@ logger = logging.getLogger(__name__)
 _DIM_OPEN = "[#808080]"
 _DIM_CLOSE = "[/]"
 
+#: Where exported reports are written, relative to the working directory.
+_EXPORT_DIR = Path("exports")
+
+#: Upper bound for the slugified topic inside an export file name.
+_SLUG_MAX_LEN = 60
+
+_UNSAFE_FILENAME_CHARS = re.compile(r"[^a-z0-9._-]+")
+
 _TERMINATION_LABELS: dict[str, str] = {
     "complete": "objective complete",
     "max_iterations": "iteration budget reached",
@@ -76,6 +89,17 @@ def _reason_label(reason: str) -> str:
     return _TERMINATION_LABELS.get(reason, reason)
 
 
+def _export_basename(report: Report) -> str:
+    """Build a safe file name stem for *report* (no extension).
+
+    The topic is slugified and, for persisted reports, suffixed with the row id
+    so two reports about the same subject do not overwrite each other.
+    """
+    slug = _UNSAFE_FILENAME_CHARS.sub("-", report.topic.strip().lower())
+    slug = slug[:_SLUG_MAX_LEN].strip("-._") or "report"
+    return f"{slug}-{report.id}" if report.id > 0 else slug
+
+
 class DeepResearchApp(App):
     CSS_PATH = "app.css"
     TITLE = "Deep Research Agent"
@@ -87,6 +111,7 @@ class DeepResearchApp(App):
         Binding("ctrl+1", "show_tab('tab-progress')", "Progress", show=True),
         Binding("ctrl+2", "show_tab('tab-reports')", "Reports", show=True),
         Binding("ctrl+b", "toggle_sidebar", "Toggle sidebar", show=True),
+        Binding("ctrl+e", "export", "Export", show=True, priority=True),
         Binding("ctrl+f", "focus_feed", "Feed", show=True),
         Binding("ctrl+x", "toggle_settings", "Settings", show=True, priority=True),
         Binding("escape", "close_detail", "Close detail", show=False),
@@ -110,6 +135,8 @@ class DeepResearchApp(App):
         self._findings = 0
         self._reason = ""
         self._storage = storage
+        self._export_service = ExportService()
+        self._export_categories = self._export_service.get_available_formats()
 
     # ── layout ──────────────────────────────────────────────────────
 
@@ -145,6 +172,9 @@ class DeepResearchApp(App):
         yield Footer()
 
     async def on_mount(self) -> None:
+        self.query_one("#report-panel", ReportDetailPanel).set_export_formats(
+            self._export_categories
+        )
         await self._refresh_reports()
         if self._initial_prompt:
             self.action_start_run()
@@ -205,6 +235,91 @@ class DeepResearchApp(App):
     def action_toggle_sidebar(self) -> None:
         sidebar = self.query_one("#report-sidebar", ReportList)
         sidebar.display = not sidebar.display
+
+    def action_export(self) -> None:
+        """Reveal the Reports tab and open the export dropdown."""
+        if self.query_one("#report-panel", ReportDetailPanel).current_report is None:
+            self.notify(
+                "Select a report to export first.", severity="warning", title="Export"
+            )
+            return
+        self.action_show_tab("tab-reports")
+        # Wait for the tab switch to lay out, otherwise the menu would open
+        # inside a hidden tab pane.
+        self.call_after_refresh(self._open_export_menu)
+
+    def _open_export_menu(self) -> None:
+        menu = self.query_one("#export-menu", ExportMenu)
+        menu.focus()
+        menu.expanded = True
+
+    @on(ExportMenu.ExportRequested)
+    def _on_export_requested(self, event: ExportMenu.ExportRequested) -> None:
+        report = self.query_one("#report-panel", ReportDetailPanel).current_report
+        if report is None:
+            self.notify(
+                "Select a report to export first.", severity="warning", title="Export"
+            )
+            return
+        self.run_worker(
+            self._export(event.formats, report),
+            name="export",
+            group="export",
+            exclusive=True,
+            exit_on_error=False,
+            description=f"export {report.topic}",
+        )
+
+    async def _export(self, formats: tuple[str, ...], report: Report) -> None:
+        """Export *report* to *formats*, off the UI thread, then report back."""
+        menu = self.query_one("#export-menu", ExportMenu)
+        panel = self.query_one("#report-panel", ReportDetailPanel)
+        menu.busy = True
+        try:
+            await asyncio.to_thread(_EXPORT_DIR.mkdir, parents=True, exist_ok=True)
+            results = await self._export_service.export_report(
+                report.content,
+                _export_basename(report),
+                list(formats),
+                str(_EXPORT_DIR),
+            )
+        except Exception as exc:
+            logger.exception("Export failed")
+            self.notify(
+                markup.escape(str(exc)), title="Export failed", severity="error"
+            )
+            return
+        finally:
+            menu.busy = False
+
+        saved = [result for result in results if not result.startswith("http")]
+        opened = [result for result in results if result.startswith("http")]
+
+        if not results:
+            self.notify(
+                f"Nothing was exported ({markup.escape(', '.join(formats))}).",
+                title="Export",
+                severity="warning",
+            )
+            return
+
+        if saved:
+            if len(saved) == 1:
+                parts = [f"Saved {_EXPORT_DIR / Path(saved[0]).name}"]
+            else:
+                parts = [f"Saved {len(saved)} files to {_EXPORT_DIR}/"]
+        else:
+            parts = []
+        if opened:
+            parts.append(
+                "opened in your browser"
+                if not parts
+                else f"also opened in your browser ({len(opened)})"
+            )
+        summary = "; ".join(parts)
+
+        panel.show_export_status(f"✓ {summary}")
+        self.notify(f"{summary}.", title="Exported")
 
     @on(Button.Pressed, "#toggle-sidebar")
     def _on_toggle_sidebar_pressed(self, _event: Button.Pressed) -> None:
